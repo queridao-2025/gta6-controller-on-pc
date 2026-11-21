@@ -117,7 +117,7 @@ KEY_MAP = {
     "g": "Y",              # Arrombar (também Y)
     # --- bumpers / triggers ---
     "q": "RB",             # Cobertura
-    # LB (C) é tratado como HOLD — ver on_key_press/release abaixo
+    "c": "LB",             # LB — weapon wheel / quick holster (hold no jogo)
     # --- sticks ---
     "h": "R3",             # Olhar atrás (R3 hold) — tecla nova
     # --- menu ---
@@ -423,24 +423,7 @@ def on_key_press(key):
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
         state["precision"] = True
 
-    # C = segura LB (weapon wheel hold) — funciona com emulação ligada ou desligada
-    # C = entra/sai do modo inventário
-    if k == "c":
-        if state["mode"] == "inventory":
-            # C solto → volta ao modo anterior e equipa (solta LB)
-            state["mode"] = state.get("_prev_mode", "on_foot")
-            set_button("LB", False)
-            if gamepad is not None:
-                gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
-            log(f"[modo] {state['mode']} (saiu inventário)")
-        else:
-            state["_prev_mode"] = state["mode"]
-            state["mode"] = "inventory"
-            set_button("LB", True)
-            log("[modo] inventory (roda aberta)")
-        return
-
-    # --- dentro do modo inventário: RS = navegação, RB = troca aba ---
+    # --- dentro do modo inventário: D-Pad = navegação, N = troca aba ---
     if state["mode"] == "inventory":
         # N: troca aba Weapons↔Items (RB tap)
         if k == "n":
@@ -448,15 +431,12 @@ def on_key_press(key):
             time.sleep(0.05)
             set_button("RB", False)
             return
-        # W/A/S/D: empurra RS na direção (sustentado enquanto a tecla está pressionada)
+        # W/A/S/D: D-Pad (digital, sem conflito com mouse)
         if k in ("w", "a", "s", "d"):
-            vx, vy = {"w": (0,1), "s": (0,-1), "a": (-1,0), "d": (1,0)}[k]
-            gamepad.right_joystick_float(
-                x_value_float=float(vx) * 0.7,
-                y_value_float=float(vy) * 0.7)
+            dpad_map = {"w": "DPAD_UP", "s": "DPAD_DOWN", "a": "DPAD_LEFT", "d": "DPAD_RIGHT"}
+            set_button(dpad_map[k], True)
             return
-        # qualquer outra tecla no inventário: ignora (não faz nada)
-        return
+        return   # ignora outras teclas no inventário
 
     if not state["emulation"]:
         return
@@ -493,10 +473,10 @@ def on_key_release(key):
 
     pressed.discard(k)
 
-    # W/A/S/D solto no modo inventário → RS volta ao centro
+    # W/A/S/D solto no modo inventário → solta D-Pad
     if state["mode"] == "inventory" and k in ("w", "a", "s", "d"):
-        if gamepad is not None:
-            gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
+        dpad_map = {"w": "DPAD_UP", "s": "DPAD_DOWN", "a": "DPAD_LEFT", "d": "DPAD_RIGHT"}
+        set_button(dpad_map[k], False)
         return
 
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
