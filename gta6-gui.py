@@ -420,18 +420,32 @@ def on_key_press(key):
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
         state["precision"] = True
 
-    # C = segura LB (weapon wheel hold) — ativa hold contínuo
+    # C = segura LB (weapon wheel hold) — funciona com emulação ligada ou desligada
     if k == "c":
         state["wheel_open"] = True
         set_button("LB", True)
         return
 
-    # N = troca aba Weapons↔Items enquanto a roda está aberta (send RB tap)
-    if k == "n" and state["wheel_open"]:
-        set_button("RB", True)
-        time.sleep(0.05)
-        set_button("RB", False)
-        return
+    if state["wheel_open"]:
+        # N: troca aba Weapons↔Items (RB tap)
+        if k == "n":
+            set_button("RB", True)
+            time.sleep(0.05)
+            set_button("RB", False)
+            return
+        # W/A/S/D: move seleção na roda (RS direction tap)
+        if k in ("w", "a", "s", "d"):
+            vx, vy = {"w": (0,1), "s": (0,-1), "a": (-1,0), "d": (1,0)}[k]
+            gamepad.right_joystick_float(x_value_float=float(vx), y_value_float=float(vy))
+            time.sleep(0.08)
+            gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
+            return
+        # Space: seleciona item destacado (A tap)
+        if k == "space":
+            set_button("A", True)
+            time.sleep(0.05)
+            set_button("A", False)
+            return
 
     if not state["emulation"]:
         return
