@@ -87,12 +87,11 @@ except ImportError:
 # ------------------------------------------------------------------ estado
 state = {
     "emulation":      True,
-    "mode":           "on_foot",
+    "mode":           "on_foot",   # "on_foot" | "driving" | "inventory"
     "precision":      False,
     "aim":            False,
-    "wheel_open":     False,   # C está sendo segurado (weapon wheel aberta)
     "mouse_captured": False,
-    "capture_rect":   None,    # (l, t, r, b) atual
+    "capture_rect":   None,        # (l, t, r, b) atual
 }
 
 buttons     = {}
@@ -329,7 +328,7 @@ def update_rs():
         rs_value["y"] = vy
 
         # --- 9. envia ao gamepad (ignorado se roda de armas aberta — RS controlado pelo WASD) ---
-        if gamepad is not None and state["emulation"] and not state["wheel_open"]:
+        if gamepad is not None and state["emulation"] and state["mode"] != "inventory":
             gamepad.right_joystick_float(
                 x_value_float=clamp(vx, -1.0, 1.0),
                 y_value_float=clamp(vy, -1.0, 1.0),
@@ -411,7 +410,12 @@ def on_key_press(key):
 
     # F12 ou Tab: toggle mode
     if k == TOGGLE_KEY or k == "tab":
-        state["mode"] = "driving" if state["mode"] == "on_foot" else "on_foot"
+        _modes = ["on_foot", "driving", "inventory"]
+        _idx = (_modes.index(state["mode"]) + 1) % len(_modes)
+        state["mode"] = _modes[_idx]
+        # ao sair do inventário, solta LB
+        if state["mode"] != "inventory":
+            set_button("LB", False)
         log("[modo] " + state["mode"])
         return
 
@@ -421,26 +425,39 @@ def on_key_press(key):
         state["precision"] = True
 
     # C = segura LB (weapon wheel hold) — funciona com emulação ligada ou desligada
+    # C = entra/sai do modo inventário
     if k == "c":
-        state["wheel_open"] = True
-        set_button("LB", True)
+        if state["mode"] == "inventory":
+            # C solto → volta ao modo anterior e equipa (solta LB)
+            state["mode"] = state.get("_prev_mode", "on_foot")
+            set_button("LB", False)
+            if gamepad is not None:
+                gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
+            log(f"[modo] {state['mode']} (saiu inventário)")
+        else:
+            state["_prev_mode"] = state["mode"]
+            state["mode"] = "inventory"
+            set_button("LB", True)
+            log("[modo] inventory (roda aberta)")
         return
 
-    if state["wheel_open"]:
+    # --- dentro do modo inventário: RS = navegação, RB = troca aba ---
+    if state["mode"] == "inventory":
         # N: troca aba Weapons↔Items (RB tap)
         if k == "n":
             set_button("RB", True)
             time.sleep(0.05)
             set_button("RB", False)
             return
-        # W/A/S/D: move seleção (RS sustentado — não tap)
-        # Solta a tecla = RS volta ao centro; solta C = equipa o item destacado
+        # W/A/S/D: empurra RS na direção (sustentado enquanto a tecla está pressionada)
         if k in ("w", "a", "s", "d"):
             vx, vy = {"w": (0,1), "s": (0,-1), "a": (-1,0), "d": (1,0)}[k]
             gamepad.right_joystick_float(
-                x_value_float=float(vx) * 0.7,   # 70% força — suficiente p/ slot, não pula
+                x_value_float=float(vx) * 0.7,
                 y_value_float=float(vy) * 0.7)
             return
+        # qualquer outra tecla no inventário: ignora (não faz nada)
+        return
 
     if not state["emulation"]:
         return
@@ -477,16 +494,8 @@ def on_key_release(key):
 
     pressed.discard(k)
 
-    # C solto → larga LB (fecha roda E equipa o item destacado automaticamente)
-    if k == "c":
-        state["wheel_open"] = False
-        set_button("LB", False)
-        # garante RS no centro ao fechar a roda
-        if gamepad is not None:
-            gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
-
-    # W/A/S/D solto com roda aberta → RS volta ao centro (para de navegar)
-    if state["wheel_open"] and k in ("w", "a", "s", "d"):
+    # W/A/S/D solto no modo inventário → RS volta ao centro
+    if state["mode"] == "inventory" and k in ("w", "a", "s", "d"):
         if gamepad is not None:
             gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
         return
@@ -828,10 +837,9 @@ class App:
     def update_ui(self):
         # mode
         mode = state["mode"]
-        self.mode_label.config(
-            text="MODO: " + ("A PE" if mode == "on_foot" else "NO CARRO"),
-            fg="#00ff88" if mode == "on_foot" else "#ffaa00",
-        )
+        MODE_LABELS = {"on_foot": ("A PE", "#00ff88"), "driving": ("NO CARRO", "#ffaa00"), "inventory": ("INVENTÁRIO", "#aa66ff")}
+        txt, clr = MODE_LABELS.get(mode, (mode.upper(), "#e0e0e0"))
+        self.mode_label.config(text="MODO: " + txt, fg=clr)
 
         # sliders → globals
         global DEADZONE_RS, ANTI_DZ, SENS_X, SENS_Y, FRICTION, SMOOTHING, WHEEL_MULT
