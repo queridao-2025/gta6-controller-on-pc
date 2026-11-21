@@ -54,11 +54,14 @@ def stop_capture():
 
 
 # ------------------------------------------------------------------ config
-DEADZONE_RS    = 0.08   # deadzone do right stick (0–1)
+DEADZONE_RS    = 0.08   # deadzone radial do right stick (0–1)
+ANTI_DZ        = 0.08   # anti-deadzone: empurra saída além da DZ do jogo (0–0.3)
 SENS_X         = 0.18   # sensibilidade horizontal
 SENS_Y         = 0.16   # sensibilidade vertical
-FRICTION        = 0.82   # quanto da velocidade fica por frame (0=para na hora, 1=nunca para)
-RESPONSE        = "progressive"  # "linear" ou "progressive" (raiz — como FiveM)
+FRICTION       = 0.82   # momentum entre frames (0=para na hora, 0.98=muito deslizante)
+SMOOTHING      = 0.30   # EMA: 0=sem suavização, 0.80=muito suave (CronusMax-style)
+RESPONSE       = "progressive"  # "linear" ou "progressive"
+AIM_RESPONSE   = "aim"          # curva mais precisa quando RMB pressionado
 MAX_VEL        = 1.0
 PRECISION_MULT = 0.35   # multiplicador ao segurar LCtrl
 AIM_MULT       = 0.50   # multiplicador ao segurar RMB (mirar)
@@ -92,9 +95,11 @@ state = {
 
 buttons    = {}
 pressed    = set()
-mouse_vel  = {"x": 0.0, "y": 0.0}
-mouse_lock = threading.Lock()
-rs_value   = {"x": 0.0, "y": 0.0}
+mouse_vel   = {"x": 0.0, "y": 0.0}   # deltas brutos acumulados
+mouse_smooth = {"x": 0.0, "y": 0.0}  # saída EMA suavizada
+_mouse_idle  = 0                       # frames consecutivos sem movimento
+mouse_lock  = threading.Lock()
+rs_value    = {"x": 0.0, "y": 0.0}
 _last_mouse = {"x": None, "y": None}
 gamepad    = None
 log_lines  = []
@@ -198,65 +203,114 @@ def log(msg):
             log_lines.pop(0)
 
 
-def _apply_response(v):
+def _apply_response(v, mode=None):
     """
-    Curva de resposta do stick.
-    linear   : saída = entrada  (relação 1:1)
-    progressive: raiz quadrada no valor absoluto — movimentos lentos ficam mais lentos,
-                 movimentos rápidos chegam perto do máximo rápido.
-                 É o que o FiveM usa para suavizar a câmera a pé.
+    Curvas de resposta do stick:
+      linear      — 1:1
+      progressive — expoente 0.65: mais controle no início, alcança máximo rápido
+      aim         — expoente 0.45: ainda mais controle fino (mira)
     """
-    if RESPONSE == "progressive":
+    if mode is None:
+        mode = RESPONSE
+    if mode in ("progressive", "aim"):
+        exp = 0.45 if mode == "aim" else 0.65
         sign = 1.0 if v >= 0 else -1.0
-        return sign * (abs(v) ** 0.65)   # expoente <1 → mais responsivo no início
+        return sign * (abs(v) ** exp)
     return v
+
+
+def _apply_anti_deadzone(v):
+    """Empurra a saída para além da deadzone interna do jogo (anti-deadzone)."""
+    if v == 0.0:
+        return 0.0
+    sign = 1.0 if v > 0 else -1.0
+    return sign * (ANTI_DZ + abs(v) * (1.0 - ANTI_DZ))
+
+
+def _radial_deadzone(vx, vy, dz):
+    """Deadzone circular: zera o vetor inteiro se magnitude < dz."""
+    mag = (vx * vx + vy * vy) ** 0.5
+    if mag < dz:
+        return 0.0, 0.0
+    # re-normaliza para que o stick chegue a 1.0 na borda
+    scale = (mag - dz) / (1.0 - dz)
+    return vx / mag * scale, vy / mag * scale
 
 
 def update_rs():
     """
     Pipeline de câmera por frame (60 Hz):
-      1. Lê acúmulo de deltas brutos do mouse (pixels desde o último frame)
-      2. Aplica friction: multiplica pelo coeficiente FRICTION (<1) → desaceleração suave
-      3. Escala pela sensibilidade + modificadores (precisão / mira)
-      4. Aplica curva de resposta não-linear
-      5. Aplica deadzone
-      6. Envia direto para o right stick (sem low-pass extra — a friction já suaviza)
+      1. Lê deltas brutos; aplica cap ±MAX_VEL para evitar overshoot
+      2. Zera velocidade se mouse ficou parado (elimina drift)
+      3. Aplica friction (momentum entre frames)
+      4. EMA smoothing (CronusMax-style)
+      5. Escala por sensibilidade + modificadores (precisão / mira)
+      6. Curva de resposta (progressive normal / aim quando mirando)
+      7. Deadzone radial circular
+      8. Anti-deadzone (cancela a deadzone interna do jogo)
+      9. Envia ao right stick
     """
-    global rs_value
+    global rs_value, _mouse_idle, mouse_smooth
     while True:
         dt = 1.0 / 60.0
 
-        # --- 1. coleta deltas acumulados ---
+        # --- 1. coleta deltas + cap ---
         with mouse_lock:
-            raw_x = mouse_vel["x"]
-            raw_y = mouse_vel["y"]
-            # --- 2. aplica friction: reduz a velocidade para o próximo frame ---
-            mouse_vel["x"] *= FRICTION
-            mouse_vel["y"] *= FRICTION
-            # zera se muito pequeno (evita drift infinito)
-            if abs(mouse_vel["x"]) < 0.01: mouse_vel["x"] = 0.0
-            if abs(mouse_vel["y"]) < 0.01: mouse_vel["y"] = 0.0
+            raw_x = clamp(mouse_vel["x"], -MAX_VEL / (SENS_X + 1e-6),
+                          MAX_VEL / (SENS_X + 1e-6))
+            raw_y = clamp(mouse_vel["y"], -MAX_VEL / (SENS_Y + 1e-6),
+                          MAX_VEL / (SENS_Y + 1e-6))
 
-        # --- 3. sensibilidade + modificadores ---
+            # --- 2. detecta mouse parado ---
+            if raw_x == 0.0 and raw_y == 0.0:
+                _mouse_idle += 1
+            else:
+                _mouse_idle = 0
+
+            # zera acúmulo imediatamente quando mouse parou
+            if _mouse_idle >= 1:
+                mouse_vel["x"] = 0.0
+                mouse_vel["y"] = 0.0
+                mouse_smooth["x"] = 0.0
+                mouse_smooth["y"] = 0.0
+            else:
+                # --- 3. friction ---
+                mouse_vel["x"] *= FRICTION
+                mouse_vel["y"] *= FRICTION
+                if abs(mouse_vel["x"]) < 0.005: mouse_vel["x"] = 0.0
+                if abs(mouse_vel["y"]) < 0.005: mouse_vel["y"] = 0.0
+
+        # --- 4. EMA smoothing ---
+        a = SMOOTHING
+        mouse_smooth["x"] = a * mouse_smooth["x"] + (1.0 - a) * raw_x
+        mouse_smooth["y"] = a * mouse_smooth["y"] + (1.0 - a) * raw_y
+        sx, sy = mouse_smooth["x"], mouse_smooth["y"]
+
+        # --- 5. sensibilidade + modificadores ---
         mult = 1.0
         if state["precision"]: mult *= PRECISION_MULT
         if state["aim"]:       mult *= AIM_MULT
 
-        vx = clamp(raw_x * SENS_X * mult, -MAX_VEL, MAX_VEL)
-        vy = clamp(raw_y * SENS_Y * mult, -MAX_VEL, MAX_VEL)
+        vx = clamp(sx * SENS_X * mult, -MAX_VEL, MAX_VEL)
+        vy = clamp(sy * SENS_Y * mult, -MAX_VEL, MAX_VEL)
 
-        # --- 4. curva de resposta ---
-        vx = _apply_response(vx)
-        vy = _apply_response(vy)
+        # --- 6. curva de resposta ---
+        curve = AIM_RESPONSE if state["aim"] else None
+        vx = _apply_response(vx, curve)
+        vy = _apply_response(vy, curve)
 
-        # --- 5. deadzone ---
-        if abs(vx) < DEADZONE_RS: vx = 0.0
-        if abs(vy) < DEADZONE_RS: vy = 0.0
+        # --- 7. deadzone radial ---
+        vx, vy = _radial_deadzone(vx, vy, DEADZONE_RS)
+
+        # --- 8. anti-deadzone ---
+        if vx != 0.0 or vy != 0.0:
+            vx = _apply_anti_deadzone(vx)
+            vy = _apply_anti_deadzone(vy)
 
         rs_value["x"] = vx
         rs_value["y"] = vy
 
-        # --- 6. envia ao gamepad ---
+        # --- 9. envia ao gamepad ---
         if gamepad is not None and state["emulation"]:
             gamepad.right_joystick_float(
                 x_value_float=clamp(vx, -1.0, 1.0),
@@ -488,13 +542,20 @@ class App:
             ("SENS_X",      0.18, 0.05, 0.60, 0.01),
             ("SENS_Y",      0.16, 0.05, 0.60, 0.01),
             ("DEADZONE_RS", 0.08, 0.00, 0.40, 0.01),
+            ("ANTI_DZ",     0.08, 0.00, 0.30, 0.01),
             ("FRICTION",    0.82, 0.50, 0.98, 0.01),
+            ("SMOOTHING",   0.30, 0.00, 0.80, 0.01),
         ]:
             f = tk.Frame(sliders, bg="#1a1a2e")
             f.pack(side="left", padx=8, expand=True, fill="x")
-            lbl_text = name
-            if name == "FRICTION":
-                lbl_text = "FRICTION (câmera)"
+            lbl_text = {
+                "SENS_X":      "SENS X (horiz)",
+                "SENS_Y":      "SENS Y (vert)",
+                "DEADZONE_RS": "DEADZONE",
+                "ANTI_DZ":     "ANTI-DEADZONE",
+                "FRICTION":    "FRICTION",
+                "SMOOTHING":   "SMOOTHING",
+            }.get(name, name)
             tk.Label(f, text=lbl_text, fg="#e0e0e0", bg="#1a1a2e",
                      font=("Segoe UI", 11, "bold")).pack()
             s = tk.Scale(f, from_=lo, to=hi, resolution=res, orient="horizontal",
@@ -599,6 +660,7 @@ class App:
                 btn.pack(side="left", padx=2, pady=2)
                 self.key_buttons[key] = btn
                 self._add_tooltip(btn, XBOX_EXPLAIN.get(key, "— (não mapeado)"))
+                btn.bind("<Button-3>", lambda e, k=key: self._open_binding_editor(k))
 
         # Log
         log_frame = tk.LabelFrame(root, text="  LOG  ", fg="#e0e0e0", bg="#1a1a2e",
@@ -651,6 +713,60 @@ class App:
         )
         log(f"[câmera] curva: {RESPONSE}")
 
+    def _open_binding_editor(self, display_key):
+        """Botão direito numa tecla → popup para reatribuir o botão Xbox."""
+        XBOX_BUTTONS = [
+            "A", "B", "X", "Y",
+            "LB", "RB", "LT", "RT",
+            "L3", "R3",
+            "START", "BACK", "GUIDE",
+            "DPAD_UP", "DPAD_DOWN", "DPAD_LEFT", "DPAD_RIGHT",
+            "— (remover)",
+        ]
+        norm = KEY_DISPLAY_TO_NORMAL.get(display_key, display_key.lower())
+        current = KEY_MAP.get(norm, "—")
+
+        popup = tk.Toplevel(self.root)
+        popup.title(f"Reatribuir  {display_key}")
+        popup.configure(bg="#1a1a2e")
+        popup.resizable(False, False)
+        popup.attributes("-topmost", True)
+        tk.Label(popup, text=f"Tecla:  {display_key}   →   atual: {current}",
+                 fg="#e0e0e0", bg="#1a1a2e",
+                 font=("Segoe UI", 11, "bold")).pack(padx=16, pady=(12, 4))
+        tk.Label(popup, text="Clique no botão Xbox desejado (feche para cancelar):",
+                 fg="#aaaaaa", bg="#1a1a2e",
+                 font=("Segoe UI", 9)).pack(padx=16, pady=(0, 8))
+
+        grid = tk.Frame(popup, bg="#1a1a2e")
+        grid.pack(padx=16, pady=(0, 12))
+
+        def apply_binding(xbox_btn):
+            if xbox_btn == "— (remover)":
+                KEY_MAP.pop(norm, None)
+                new_action = "—"
+            else:
+                KEY_MAP[norm] = xbox_btn
+                new_action = xbox_btn
+            if display_key in self.key_buttons:
+                has = new_action != "—"
+                self.key_buttons[display_key].config(
+                    text=display_key + "\n" + new_action,
+                    bg="#3d3d5c" if has else "#252535",
+                    fg="#ffffff"  if has else "#707080",
+                )
+            log(f"[binding] {display_key} → {new_action}")
+            popup.destroy()
+
+        for i, xbtn in enumerate(XBOX_BUTTONS):
+            col, row_i = i % 4, i // 4
+            highlight = "#005599" if xbtn == current else "#3d3d5c"
+            tk.Button(grid, text=xbtn, width=14,
+                      font=("Segoe UI", 10, "bold"),
+                      bg=highlight, fg="#e0e0e0",
+                      command=lambda b=xbtn: apply_binding(b)
+                      ).grid(row=row_i, column=col, padx=4, pady=3)
+
 
     def update_ui(self):
         # mode
@@ -660,17 +776,19 @@ class App:
             fg="#00ff88" if mode == "on_foot" else "#ffaa00",
         )
 
-        global RESPONSE
-        RESPONSE = "linear" if RESPONSE == "progressive" else "progressive"
-        # emulacao button
+        # sliders → globals
+        global DEADZONE_RS, ANTI_DZ, SENS_X, SENS_Y, FRICTION, SMOOTHING
+        DEADZONE_RS = self.sliders["DEADZONE_RS"].get()
+        ANTI_DZ     = self.sliders["ANTI_DZ"].get()
+        SENS_X      = self.sliders["SENS_X"].get()
+        SENS_Y      = self.sliders["SENS_Y"].get()
+        FRICTION    = self.sliders["FRICTION"].get()
+        SMOOTHING   = self.sliders["SMOOTHING"].get()
+        # emulacao + mouse capture status
         self.emu_btn.config(
             text="Emulação: " + ("ON" if state["emulation"] else "OFF"),
             bg="#00ff88" if state["emulation"] else "#ff5555",
         )
-
-
-
-        # mouse capture
         if state["mouse_captured"]:
             r = state["capture_rect"]
             dim = f" {r[2]-r[0]}x{r[3]-r[1]}" if r else ""
@@ -678,12 +796,6 @@ class App:
         else:
             self.mouse_label.config(text="🖱 MOUSE: LIVRE", fg="#808080")
 
-        # sliders → globals
-        global DEADZONE_RS, SENS_X, SENS_Y, FRICTION
-        DEADZONE_RS = self.sliders["DEADZONE_RS"].get()
-        SENS_X      = self.sliders["SENS_X"].get()
-        SENS_Y      = self.sliders["SENS_Y"].get()
-        FRICTION    = self.sliders["FRICTION"].get()
 
 
         # zoom
