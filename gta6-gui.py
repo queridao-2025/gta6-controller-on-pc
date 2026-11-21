@@ -431,10 +431,11 @@ def on_key_press(key):
             time.sleep(0.05)
             set_button("RB", False)
             return
-        # W/A/S/D: D-Pad (digital, sem conflito com mouse)
+        # W/A/S/D: RS direto (wheel do GTA 6 usa right stick, não D-Pad)
+        # update_rs() está bloqueado no inventory mode, então não há race condition
         if k in ("w", "a", "s", "d"):
-            dpad_map = {"w": "DPAD_UP", "s": "DPAD_DOWN", "a": "DPAD_LEFT", "d": "DPAD_RIGHT"}
-            set_button(dpad_map[k], True)
+            vx, vy = {"w": (0,1), "s": (0,-1), "a": (-1,0), "d": (1,0)}[k]
+            gamepad.right_joystick_float(x_value_float=vx, y_value_float=vy)
             return
         return   # ignora outras teclas no inventário
 
@@ -473,10 +474,10 @@ def on_key_release(key):
 
     pressed.discard(k)
 
-    # W/A/S/D solto no modo inventário → solta D-Pad
+    # W/A/S/D solto no modo inventário → RS volta ao centro
     if state["mode"] == "inventory" and k in ("w", "a", "s", "d"):
-        dpad_map = {"w": "DPAD_UP", "s": "DPAD_DOWN", "a": "DPAD_LEFT", "d": "DPAD_RIGHT"}
-        set_button(dpad_map[k], False)
+        if gamepad is not None:
+            gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
         return
 
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
