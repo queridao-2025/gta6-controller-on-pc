@@ -407,15 +407,24 @@ def on_key_press(key):
         log("[emulacao] " + ("ON" if state["emulation"] else "OFF"))
         return
 
-    # F12 ou Tab: toggle mode
+    # F12 ou Tab: cicla modos
     if k == TOGGLE_KEY or k == "tab":
         _modes = ["on_foot", "driving", "inventory"]
         _idx = (_modes.index(state["mode"]) + 1) % len(_modes)
+        old_mode = state["mode"]
         state["mode"] = _modes[_idx]
-        # ao sair do inventário, solta LB
-        if state["mode"] != "inventory":
+        # inventário: segura LB automaticamente ao entrar, solta ao sair
+        if state["mode"] == "inventory" and old_mode != "inventory":
+            set_button("LB", True)
+            log("[modo] inventory (LB hold auto)")
+        elif old_mode == "inventory":
             set_button("LB", False)
-        log("[modo] " + state["mode"])
+            # reseta RS ao sair do inventário
+            if gamepad is not None:
+                gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
+            log(f"[modo] {state['mode']} (LB solto)")
+        else:
+            log(f"[modo] {state['mode']}")
         return
 
     pressed.add(k)
