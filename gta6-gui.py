@@ -328,8 +328,8 @@ def update_rs():
         rs_value["x"] = vx
         rs_value["y"] = vy
 
-        # --- 9. envia ao gamepad ---
-        if gamepad is not None and state["emulation"]:
+        # --- 9. envia ao gamepad (ignorado se roda de armas aberta — RS controlado pelo WASD) ---
+        if gamepad is not None and state["emulation"] and not state["wheel_open"]:
             gamepad.right_joystick_float(
                 x_value_float=clamp(vx, -1.0, 1.0),
                 y_value_float=clamp(vy, -1.0, 1.0),
@@ -433,18 +433,13 @@ def on_key_press(key):
             time.sleep(0.05)
             set_button("RB", False)
             return
-        # W/A/S/D: move seleção na roda (RS direction tap)
+        # W/A/S/D: move seleção (RS sustentado — não tap)
+        # Solta a tecla = RS volta ao centro; solta C = equipa o item destacado
         if k in ("w", "a", "s", "d"):
             vx, vy = {"w": (0,1), "s": (0,-1), "a": (-1,0), "d": (1,0)}[k]
-            gamepad.right_joystick_float(x_value_float=float(vx), y_value_float=float(vy))
-            time.sleep(0.08)
-            gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
-            return
-        # Space: seleciona item destacado (A tap)
-        if k == "space":
-            set_button("A", True)
-            time.sleep(0.05)
-            set_button("A", False)
+            gamepad.right_joystick_float(
+                x_value_float=float(vx) * 0.7,   # 70% força — suficiente p/ slot, não pula
+                y_value_float=float(vy) * 0.7)
             return
 
     if not state["emulation"]:
@@ -482,10 +477,19 @@ def on_key_release(key):
 
     pressed.discard(k)
 
-    # C solto → larga LB (fecha weapon wheel)
+    # C solto → larga LB (fecha roda E equipa o item destacado automaticamente)
     if k == "c":
         state["wheel_open"] = False
         set_button("LB", False)
+        # garante RS no centro ao fechar a roda
+        if gamepad is not None:
+            gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
+
+    # W/A/S/D solto com roda aberta → RS volta ao centro (para de navegar)
+    if state["wheel_open"] and k in ("w", "a", "s", "d"):
+        if gamepad is not None:
+            gamepad.right_joystick_float(x_value_float=0.0, y_value_float=0.0)
+        return
 
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
         state["precision"] = False
