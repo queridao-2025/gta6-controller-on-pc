@@ -65,6 +65,7 @@ AIM_RESPONSE   = "aim"          # curva mais precisa quando RMB pressionado
 MAX_VEL        = 1.0
 PRECISION_MULT = 0.35   # multiplicador ao segurar LCtrl
 AIM_MULT       = 0.45   # multiplicador ao segurar RMB (mirar)
+WHEEL_MULT      = 0.12   # multiplicador com roda de armas aberta (movimento lento p/ selecionar)
 HALF_THROTTLE  = 0.25
 TOGGLE_KEY     = "f12"
 
@@ -306,6 +307,7 @@ def update_rs():
         mult = 1.0
         if state["precision"]: mult *= PRECISION_MULT
         if state["aim"]:       mult *= AIM_MULT
+        if state["wheel_open"]: mult *= WHEEL_MULT   # lento p/ selecionar item na roda
 
         vx = clamp(sx * SENS_X * mult, -MAX_VEL, MAX_VEL)
         vy = clamp(sy * SENS_Y * mult, -MAX_VEL, MAX_VEL)
@@ -573,12 +575,13 @@ class App:
         sliders.pack(fill="x", padx=10, pady=5)
         self.sliders = {}
         for name, val, lo, hi, res in [
-            ("SENS_X",      0.18, 0.05, 0.60, 0.01),
-            ("SENS_Y",      0.16, 0.05, 0.60, 0.01),
+            ("SENS_X",      0.20, 0.05, 0.60, 0.01),
+            ("SENS_Y",      0.18, 0.05, 0.60, 0.01),
             ("DEADZONE_RS", 0.08, 0.00, 0.40, 0.01),
             ("ANTI_DZ",     0.08, 0.00, 0.30, 0.01),
-            ("FRICTION",    0.82, 0.50, 0.98, 0.01),
-            ("SMOOTHING",   0.30, 0.00, 0.80, 0.01),
+            ("FRICTION",    0.80, 0.50, 0.98, 0.01),
+            ("SMOOTHING",   0.20, 0.00, 0.80, 0.01),
+            ("WHEEL_MULT",  0.12, 0.02, 0.50, 0.01),
         ]:
             f = tk.Frame(sliders, bg="#1a1a2e")
             f.pack(side="left", padx=8, expand=True, fill="x")
@@ -589,6 +592,7 @@ class App:
                 "ANTI_DZ":     "ANTI-DEADZONE",
                 "FRICTION":    "FRICTION",
                 "SMOOTHING":   "SMOOTHING",
+                "WHEEL_MULT":  "SENS RODA",
             }.get(name, name)
             tk.Label(f, text=lbl_text, fg="#e0e0e0", bg="#1a1a2e",
                      font=("Segoe UI", 11, "bold")).pack()
@@ -812,13 +816,14 @@ class App:
         )
 
         # sliders → globals
-        global DEADZONE_RS, ANTI_DZ, SENS_X, SENS_Y, FRICTION, SMOOTHING
-        DEADZONE_RS = self.sliders["DEADZONE_RS"].get()
-        ANTI_DZ     = self.sliders["ANTI_DZ"].get()
-        SENS_X      = self.sliders["SENS_X"].get()
-        SENS_Y      = self.sliders["SENS_Y"].get()
-        FRICTION    = self.sliders["FRICTION"].get()
-        SMOOTHING   = self.sliders["SMOOTHING"].get()
+        global DEADZONE_RS, ANTI_DZ, SENS_X, SENS_Y, FRICTION, SMOOTHING, WHEEL_MULT
+        DEADZONE_RS  = self.sliders["DEADZONE_RS"].get()
+        ANTI_DZ      = self.sliders["ANTI_DZ"].get()
+        SENS_X       = self.sliders["SENS_X"].get()
+        SENS_Y       = self.sliders["SENS_Y"].get()
+        FRICTION     = self.sliders["FRICTION"].get()
+        SMOOTHING    = self.sliders["SMOOTHING"].get()
+        WHEEL_MULT   = self.sliders["WHEEL_MULT"].get()
         # emulacao + mouse capture status
         self.emu_btn.config(
             text="Emulação: " + ("ON" if state["emulation"] else "OFF"),
