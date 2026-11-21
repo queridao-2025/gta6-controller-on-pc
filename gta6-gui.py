@@ -56,15 +56,15 @@ def stop_capture():
 # ------------------------------------------------------------------ config
 DEADZONE_RS    = 0.08   # deadzone radial do right stick (0–1)
 ANTI_DZ        = 0.08   # anti-deadzone: empurra saída além da DZ do jogo (0–0.3)
-SENS_X         = 0.18   # sensibilidade horizontal
-SENS_Y         = 0.16   # sensibilidade vertical
-FRICTION       = 0.82   # momentum entre frames (0=para na hora, 0.98=muito deslizante)
-SMOOTHING      = 0.30   # EMA: 0=sem suavização, 0.80=muito suave (CronusMax-style)
+SENS_X         = 0.20   # sensibilidade horizontal (aumentado p/ rotação 360°)
+SENS_Y         = 0.18   # sensibilidade vertical
+FRICTION       = 0.80   # momentum entre frames (menor = para mais rápido)
+SMOOTHING      = 0.20   # EMA: menor = câmera mais responsiva / 360° mais rápida
 RESPONSE       = "progressive"  # "linear" ou "progressive"
 AIM_RESPONSE   = "aim"          # curva mais precisa quando RMB pressionado
 MAX_VEL        = 1.0
 PRECISION_MULT = 0.35   # multiplicador ao segurar LCtrl
-AIM_MULT       = 0.50   # multiplicador ao segurar RMB (mirar)
+AIM_MULT       = 0.45   # multiplicador ao segurar RMB (mirar)
 HALF_THROTTLE  = 0.25
 TOGGLE_KEY     = "f12"
 
@@ -89,30 +89,46 @@ state = {
     "mode":           "on_foot",
     "precision":      False,
     "aim":            False,
+    "wheel_open":     False,   # C está sendo segurado (weapon wheel aberta)
     "mouse_captured": False,
-    "capture_rect":   None,   # (l, t, r, b) atual
+    "capture_rect":   None,    # (l, t, r, b) atual
 }
 
-buttons    = {}
-pressed    = set()
-mouse_vel   = {"x": 0.0, "y": 0.0}   # deltas brutos acumulados
-mouse_smooth = {"x": 0.0, "y": 0.0}  # saída EMA suavizada
+buttons     = {}
+pressed     = set()
+mouse_vel    = {"x": 0.0, "y": 0.0}    # deltas brutos acumulados
+mouse_smooth = {"x": 0.0, "y": 0.0}   # saída EMA suavizada
 _mouse_idle  = 0                       # frames consecutivos sem movimento
-mouse_lock  = threading.Lock()
-rs_value    = {"x": 0.0, "y": 0.0}
-_last_mouse = {"x": None, "y": None}
-gamepad    = None
-log_lines  = []
-log_lock   = threading.Lock()
+mouse_lock   = threading.Lock()
+rs_value     = {"x": 0.0, "y": 0.0}
+_last_mouse  = {"x": None, "y": None}
+gamepad      = None
+log_lines    = []
+log_lock     = threading.Lock()
 
 KEY_MAP = {
-    "space": "A", "b": "B", "r": "X", "g": "X", "f": "Y",
-    "q": "RB", "c": "LB", "z": "R3",
-    "esc": "START", "o": "START", "p": "BACK",
+    # --- face buttons (GTA VI default) ---
+    "space": "A",          # Pular / Subir / Handbrake
+    "z": "B",              # Agachar (B no GTA VI; antes era R3 — CORRIGIDO)
+    "b": "X",              # Soco / Melee (X no GTA VI; antes era B — CORRIGIDO)
+    "r": "X",              # Recarregar (também X)
+    "x": "X",              # Shove / Clear Trunk (X hold no jogo)
+    "f": "Y",              # Interagir / Entrar-sair veículo
+    "g": "Y",              # Arrombar (também Y)
+    # --- bumpers / triggers ---
+    "q": "RB",             # Cobertura
+    # LB (C) é tratado como HOLD — ver on_key_press/release abaixo
+    # --- sticks ---
+    "h": "R3",             # Olhar atrás (R3 hold) — tecla nova
+    # --- menu ---
+    "esc": "START", "o": "START",
+    "p": "BACK", "i": "BACK",
     "enter": "A", "backspace": "B",
     "f1": "GUIDE", "f2": "BACK", "home": "GUIDE", "insert": "BACK",
+    # --- D-Pad ---
     "1": "DPAD_UP", "2": "DPAD_DOWN", "3": "DPAD_LEFT", "4": "DPAD_RIGHT",
     "e": "DPAD_RIGHT", "t": "DPAD_RIGHT",
+    # --- sprint ---
     "rshift": "L3", "shift": "L3", "shift_l": "L3",
 }
 MOVE_KEYS = {"w", "a", "s", "d"}
@@ -402,6 +418,19 @@ def on_key_press(key):
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
         state["precision"] = True
 
+    # C = segura LB (weapon wheel hold) — ativa hold contínuo
+    if k == "c":
+        state["wheel_open"] = True
+        set_button("LB", True)
+        return
+
+    # N = troca aba Weapons↔Items enquanto a roda está aberta (send RB tap)
+    if k == "n" and state["wheel_open"]:
+        set_button("RB", True)
+        time.sleep(0.05)
+        set_button("RB", False)
+        return
+
     if not state["emulation"]:
         return
 
@@ -436,6 +465,11 @@ def on_key_release(key):
         return
 
     pressed.discard(k)
+
+    # C solto → larga LB (fecha weapon wheel)
+    if k == "c":
+        state["wheel_open"] = False
+        set_button("LB", False)
 
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
         state["precision"] = False
@@ -619,29 +653,30 @@ class App:
                                     font=("Segoe UI", 11, "bold"))
         layer_frame.pack(fill="x", pady=(3, 0))
         for line in ["LCtrl/Alt: mouse mais lento",
-                     "RMB: LT + mouse mais lento",
-                     "LWin: liga/desliga + captura mouse",
-                     "F12 / Tab: alterna a pé / no carro",
-                     "V: RT ~25% (meia accel)"]:
+                     "RMB: LT (mira) + cursor mais lento",
+                     "C (segurar): roda de armas / inventário (LB)",
+                     "N: troca aba Weapons↔Items (roda aberta)",
+                     "F12/Tab: a pé / no carro  |  LWin: liga/desliga",
+                     "V: RT ~25% (meia acel)  |  H: olhar atrás (R3)"]:
             tk.Label(layer_frame, text=line, fg="#e0e0e0", bg="#1a1a2e",
                      font=("Consolas", 10), anchor="w").pack(fill="x", padx=5, pady=1)
 
         rows = [
-            [("Esc","Menu"),("F1","Guia"),("F2","Ver"),("Home","Guia"),
-             ("Ins","Ver"),("P","Menu"),("O","Menu"),("LWin","Captura")],
+            [("Esc","Menu"),("F1","Guia"),("F2","Mapa"),("Home","Guia"),
+             ("Ins","Mapa"),("P","Mapa"),("O","Menu"),("LWin","Captura")],
             [("`",""),("1","D-Cima"),("2","D-Baixo"),("3","D-Esq"),("4","D-Dir"),
              ("5",""),("6",""),("7",""),("8",""),("9",""),("0",""),
              ("-",""),("=",""),("Bksp","B")],
-            [("Tab",""),("Q","RB"),("W","LS Cima"),("E","D-Dir"),("R","X"),
+            [("Tab",""),("Q","RB Cobertura"),("W","LS Cima"),("E","D-Dir"),("R","X Recarrega"),
              ("T","D-Dir"),("Y",""),("U",""),("I","BACK"),
              ("[",""),("'",""),("Enter","A")],
-            [("A","LS Esq"),("S","LS Baixo"),("D","LS Dir"),("F","Y"),("G","X"),
-             ("H",""),("J",""),("K",""),("L",""),
+            [("A","LS Esq"),("S","LS Baixo"),("D","LS Dir"),("F","Y Interage"),("G","Y Arromba"),
+             ("H","R3 Atrás"),("J",""),("K",""),("L",""),
              (";",""),("Alt","Cam1")],
-            [("LCtrl","Cam1"),("LShift","L3"),("RShift","L3"),("Caps","LT"),
-             ("Z","R3"),("C","LB"),("V","RT 25%"),("B","B"),("N",""),("M",""),
+            [("LCtrl","Cam1"),("LShift","L3 Corre"),("RShift","L3 Corre"),("Caps","LT"),
+             ("Z","B Agacha"),("C","LB Segura"),("V","RT 25%"),("B","X Soco"),("N","Tab Roda"),("M",""),
              (",",""),(".",""),("/",""),("RCtrl","RB")],
-            [("Space","A")],
+            [("Space","A Pula")],
         ]
 
         self.key_buttons = {}
