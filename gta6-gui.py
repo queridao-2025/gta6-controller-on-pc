@@ -306,7 +306,6 @@ def update_rs():
         mult = 1.0
         if state["precision"]: mult *= PRECISION_MULT
         if state["aim"]:       mult *= AIM_MULT
-        if state["wheel_open"]: mult *= WHEEL_MULT   # lento p/ selecionar item na roda
 
         vx = clamp(sx * SENS_X * mult, -MAX_VEL, MAX_VEL)
         vy = clamp(sy * SENS_Y * mult, -MAX_VEL, MAX_VEL)
