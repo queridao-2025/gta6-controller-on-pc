@@ -306,6 +306,7 @@ def update_rs():
         mult = 1.0
         if state["precision"]: mult *= PRECISION_MULT
         if state["aim"]:       mult *= AIM_MULT
+        if "c" in pressed:     mult *= WHEEL_MULT   # LB segurado = roda aberta = mouse lento
 
         vx = clamp(sx * SENS_X * mult, -MAX_VEL, MAX_VEL)
         vy = clamp(sy * SENS_Y * mult, -MAX_VEL, MAX_VEL)
