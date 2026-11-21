@@ -474,6 +474,10 @@ def on_key_release(key):
 
     pressed.discard(k)
 
+    # C solto no inventory mode: NÃO solta LB (mantém roda aberta; Tab/F12 sai do modo)
+    if k == "c" and state["mode"] == "inventory":
+        return
+
     # W/A/S/D solto no modo inventário → RS volta ao centro
     if state["mode"] == "inventory" and k in ("w", "a", "s", "d"):
         if gamepad is not None:
