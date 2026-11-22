@@ -496,27 +496,17 @@ def update_rs():
         time.sleep(1.0 / 120.0)   # 120 Hz
 
 
-_button_refs = {}   # button_name → count of active sources (keys/mouse)
-
 def set_button(name, val, source=None):
-    """Press/release button with ref-count. Multiple keys can map to same button."""
+    """Press/release button directly. Idempotent — safe for any input source."""
     if gamepad is None or not state["emulation"]:
         return
     btn = buttons.get(name)
     if btn is None:
         return
-
-    if source is None:
-        source = "default"
-
     if val:
-        _button_refs[name] = _button_refs.get(name, 0) + 1
-        if _button_refs[name] == 1:
-            gamepad.press_button(button=btn)
+        gamepad.press_button(button=btn)
     else:
-        _button_refs[name] = max(0, _button_refs.get(name, 0) - 1)
-        if _button_refs[name] == 0:
-            gamepad.release_button(button=btn)
+        gamepad.release_button(button=btn)
     gamepad.update()
 
 
@@ -613,7 +603,9 @@ def on_key_press(key):
         y = ( 1.0 if "w" in pressed else 0.0) + (-1.0 if "s" in pressed else 0.0)
         set_left_stick(x, y)
     if k == "v":     set_trigger("RT", HALF_THROTTLE)
-    if k in KEY_MAP: set_button(KEY_MAP[k], True, source=f"key:{k}")
+    if k in KEY_MAP:
+        log(f"[tecla] {k} → {KEY_MAP[k]} (press)")
+        set_button(KEY_MAP[k], True, source=f"key:{k}")
 
 
 def on_key_release(key):
@@ -650,7 +642,9 @@ def on_key_release(key):
         y = ( 1.0 if "w" in pressed else 0.0) + (-1.0 if "s" in pressed else 0.0)
         set_left_stick(x, y)
     if k == "v":     set_trigger("RT", 0.0)
-    if k in KEY_MAP: set_button(KEY_MAP[k], False, source=f"key:{k}")
+    if k in KEY_MAP:
+        log(f"[tecla] {k} → {KEY_MAP[k]} (release)")
+        set_button(KEY_MAP[k], False, source=f"key:{k}")
 
 # ------------------------------------------------------------------ mouse
 def on_mouse_move(x, y):
