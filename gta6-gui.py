@@ -464,9 +464,24 @@ _KEY_CANON = {
 }
 
 
+_VK_SPECIAL = {
+    0x08: "backspace", 0x09: "tab", 0x0D: "enter", 0x1B: "esc", 0x20: "space",
+    0x21: "page_up", 0x22: "page_down", 0x23: "end", 0x24: "home",
+    0x25: "left", 0x26: "up", 0x27: "right", 0x28: "down",
+    0x2D: "insert", 0x2E: "delete", 0x5B: "cmd", 0x5C: "cmd_r",
+    0x70: "f1", 0x71: "f2", 0x72: "f3", 0x73: "f4", 0x74: "f5",
+    0x75: "f6", 0x76: "f7", 0x77: "f8", 0x78: "f9", 0x79: "f10",
+    0x7A: "f11", 0x7B: "f12", 0x90: "num_lock", 0x91: "scroll_lock",
+    0x13: "pause", 0x14: "caps_lock", 0x10: "shift_l", 0x11: "ctrl_l",
+    0x12: "alt_l", 0xA0: "shift_l", 0xA1: "shift_r", 0xA2: "ctrl_l",
+    0xA3: "ctrl_r", 0xA4: "alt_l", 0xA5: "alt_r",
+}
+_VK_NUMPAD = {0x60+i: "num%d" % i for i in range(10)}
+
 def normalize_key(key):
-    """Nome estável da tecla. Letras/números usam o código virtual, então
-    continuam certos com Shift, Ctrl pressionados e em qualquer layout."""
+    """Nome estável da tecla. Letras/números usam o código virtual (corretos
+    com Shift/Ctrl e em qualquer layout); teclas especiais usam o nome do
+    pynput ou o vk. NUNCA retorna None para tecla física válida."""
     try:
         if keyboard is not None and isinstance(key, keyboard.KeyCode):
             vk = getattr(key, "vk", None)
@@ -475,8 +490,10 @@ def normalize_key(key):
                     return chr(vk).lower()
                 if 0x30 <= vk <= 0x39:
                     return chr(vk)
-                if 0x60 <= vk <= 0x69:
-                    return "num" + str(vk - 0x60)
+                if vk in _VK_NUMPAD:
+                    return _VK_NUMPAD[vk]
+                if vk in _VK_SPECIAL:
+                    return _VK_SPECIAL[vk]
             ch = getattr(key, "char", None)
             if ch and ch.isprintable():
                 return ch.lower()
