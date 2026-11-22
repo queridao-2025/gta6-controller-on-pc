@@ -166,6 +166,7 @@ _last_mouse_time   = 0.0
 mouse_lock   = threading.Lock()
 rs_value     = {"x": 0.0, "y": 0.0}
 
+_last_mouse  = {"x": None, "y": None}
 gamepad      = None
 log_lines    = []
 log_lock     = threading.Lock()
