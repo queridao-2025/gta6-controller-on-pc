@@ -6,10 +6,10 @@ LWin: liga/desliga emulação (e confinamento).
 F12: alterna modo a pé / no carro.
 """
 
+import os
 import time
 import threading
 import tkinter as tk
-import ctypes
 import ctypes.wintypes
 
 # ------------------------------------------------------------------ Win32
@@ -40,6 +40,7 @@ def _unclip():
 
 def start_capture():
     rect = _clip_to_foreground()
+    _check_profile()
     state["mouse_captured"] = True
     state["capture_rect"]   = rect
     w = rect[2] - rect[0]
@@ -68,6 +69,59 @@ AIM_MULT       = 0.45   # multiplicador ao segurar RMB (mirar)
 WHEEL_MULT      = 0.12   # multiplicador com roda de armas aberta (movimento lento p/ selecionar)
 HALF_THROTTLE  = 0.25
 TOGGLE_KEY     = "f12"
+
+# Perfis por jogo — auto-switch quando a janela em primeiro plano da janela muda
+PROFILES = {
+    "gta": {
+        "window_match": ["gta", "grand theft", "fivem", "gta5", "gta6"],
+        "SENS_X": 0.20, "SENS_Y": 0.18, "FRICTION": 0.80, "SMOOTHING": 0.20,
+        "RESPONSE": "progressive", "DEADZONE_RS": 0.08, "ANTI_DZ": 0.08,
+    },
+    "desktop": {
+        "window_match": ["explorer", "chrome", "firefox", "code", "terminal", "cmd", "powershell"],
+        "SENS_X": 0.10, "SENS_Y": 0.10, "FRICTION": 0.70, "SMOOTHING": 0.15,
+        "RESPONSE": "linear", "DEADZONE_RS": 0.05, "ANTI_DZ": 0.05,
+    },
+}
+_active_profile = "gta"   # perfil atual
+
+def _get_foreground_title():
+    """Retorna o título da janela em primeiro plano (ou string vazia)."""
+    hwnd = _user32.GetForegroundWindow()
+    if not hwnd:
+        return ""
+    buf = ctypes.create_unicode_buffer(256)
+    _user32.GetWindowTextW(hwnd, buf, 256)
+    return buf.value.lower()
+
+def _check_profile():
+    """Verifica a janela em primeiro plano e troca o perfil se necessário."""
+    global _active_profile
+    title = _get_foreground_title()
+    best = None
+    for name, prof in PROFILES.items():
+        for pat in prof["window_match"]:
+            if pat in title:
+                best = name
+                break
+        if best:
+            break
+    if best and best != _active_profile:
+        _apply_profile(best)
+        log(f"[perfil] → {best.upper()} (janela: '{title[:40]}')")
+
+def _apply_profile(name):
+    """Aplica os settings de um perfil às variáveis globais."""
+    global SENS_X, SENS_Y, FRICTION, SMOOTHING, RESPONSE, DEADZONE_RS, ANTI_DZ, _active_profile
+    prof = PROFILES[name]
+    SENS_X     = prof["SENS_X"]
+    SENS_Y     = prof["SENS_Y"]
+    FRICTION   = prof["FRICTION"]
+    SMOOTHING  = prof["SMOOTHING"]
+    RESPONSE   = prof["RESPONSE"]
+    DEADZONE_RS = prof["DEADZONE_RS"]
+    ANTI_DZ    = prof["ANTI_DZ"]
+    _active_profile = name
 
 # ------------------------------------------------------------------ imports
 try:
@@ -222,17 +276,50 @@ def log(msg):
 def _apply_response(v, mode=None):
     """
     Curvas de resposta do stick:
-      linear      — 1:1
-      progressive — expoente 0.65: mais controle no início, alcança máximo rápido
-      aim         — expoente 0.45: ainda mais controle fino (mira)
+      linear           — 1:1
+      progressive      — expoente 0.65: mais controle no início, alcança máximo rápido
+      aim              — expoente 0.45: ainda mais controle fino (mira)
+      enhanced         — 3 regiões (AntiMicroX-style):
+                           0-40%: 0.405x (micro-precisão)
+                           40-80%: linear
+                           80-100%: acelerado (v²)
+      easing_quadratic — 3 regiões + ease-in nos últimos 20% (simula FPS controller)
+                           0-40%: 0.405x
+                           40-80%: linear
+                           80-100%: easeInQuad (acelera gradual até 1.0)
     """
     if mode is None:
         mode = RESPONSE
-    if mode in ("progressive", "aim"):
-        exp = 0.45 if mode == "aim" else 0.65
-        sign = 1.0 if v >= 0 else -1.0
-        return sign * (abs(v) ** exp)
-    return v
+
+    sign = 1.0 if v >= 0 else -1.0
+    a = abs(v)
+
+    if mode == "enhanced":
+        if a < 0.40:
+            return sign * (a * 0.405)
+        elif a < 0.80:
+            return sign * ((a - 0.40) / 0.40 * 0.595 + 0.162)
+        else:
+            t = (a - 0.80) / 0.20
+            return sign * (t * t * 0.243 + 0.757)
+
+    if mode == "easing_quadratic":
+        if a < 0.40:
+            return sign * (a * 0.405)
+        elif a < 0.80:
+            return sign * ((a - 0.40) / 0.40 * 0.595 + 0.162)
+        else:
+            t = (a - 0.80) / 0.20
+            ease = t * t * (3.0 - 2.0 * t)   # smoothstep ease-in-out
+            return sign * (ease * 0.243 + 0.757)
+
+    if mode == "aim":
+        return sign * (a ** 0.45)
+
+    if mode == "progressive":
+        return sign * (a ** 0.65)
+
+    return v   # linear
 
 
 def _apply_anti_deadzone(v):
@@ -267,7 +354,14 @@ def update_rs():
       9. Envia ao right stick
     """
     global rs_value, _mouse_idle, mouse_smooth
+    _last_profile_check = 0.0
     while True:
+        # --- 0. troca de perfil a cada ~1s ---
+        now = time.time()
+        if now - _last_profile_check > 1.0:
+            _check_profile()
+            _last_profile_check = now
+
         dt = 1.0 / 60.0
 
         # --- 1. coleta deltas + cap ---
@@ -586,16 +680,18 @@ class App:
             s.pack()
             self.sliders[name] = s
 
-        # Botão de curva de resposta
+        # Dropdown de curva de resposta
         self.response_var = tk.StringVar(value="progressive")
         resp_frame = tk.Frame(sliders, bg="#1a1a2e")
         resp_frame.pack(side="left", padx=8)
         tk.Label(resp_frame, text="CURVA", fg="#e0e0e0", bg="#1a1a2e",
                  font=("Segoe UI", 11, "bold")).pack()
-        self.resp_btn = tk.Button(resp_frame, text="Progressive",
-                                  font=("Segoe UI", 10, "bold"),
-                                  bg="#3d3d5c", fg="#e0e0e0", width=12,
-                                  command=self.toggle_response)
+        self.resp_btn = tk.OptionMenu(
+            resp_frame, self.response_var,
+            "linear", "progressive", "enhanced", "easing_quadratic",
+            command=self._on_response_change)
+        self.resp_btn.config(font=("Segoe UI", 10, "bold"),
+                             bg="#3d3d5c", fg="#e0e0e0", width=14)
         self.resp_btn.pack(pady=4)
 
         # Keyboard zoom
@@ -726,12 +822,18 @@ class App:
         )
         log("[emulacao] " + ("ON" if state["emulation"] else "OFF"))
 
-    def toggle_response(self):
+    def _on_response_change(self, value):
         global RESPONSE
-        RESPONSE = "linear" if RESPONSE == "progressive" else "progressive"
+        RESPONSE = value
+        labels = {
+            "linear": "Linear",
+            "progressive": "Progressive",
+            "enhanced": "Enhanced",
+            "easing_quadratic": "Easing Quad",
+        }
         self.resp_btn.config(
-            text="Progressive" if RESPONSE == "progressive" else "Linear",
-            bg="#005599" if RESPONSE == "progressive" else "#3d3d5c",
+            text=labels.get(RESPONSE, RESPONSE),
+            bg="#005599" if RESPONSE != "linear" else "#3d3d5c",
         )
         log(f"[câmera] curva: {RESPONSE}")
 
