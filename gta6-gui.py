@@ -8,7 +8,9 @@ F12: alterna modo a pé / no carro.
 
 import os
 import time
+import math
 import threading
+from collections import deque
 import tkinter as tk
 import ctypes.wintypes
 
@@ -60,8 +62,9 @@ ANTI_DZ        = 0.08   # anti-deadzone: empurra saída além da DZ do jogo (0�
 SENS_X         = 0.20   # sensibilidade horizontal (aumentado p/ rotação 360°)
 SENS_Y         = 0.18   # sensibilidade vertical
 FRICTION       = 0.80   # momentum entre frames (menor = para mais rápido)
-SMOOTHING      = 0.20   # EMA: menor = câmera mais responsiva / 360° mais rápida
-RESPONSE       = "progressive"  # "linear" ou "progressive"
+SMOOTHING      = 0.20   # EMA time-correct: tau = SMOOTHING * SMOOTHING_MAX_TAU_MS
+SMOOTHING_MAX_TAU_MS = 60.0  # máximo tau de suavização em ms (Ghostrol-style)
+RESPONSE       = "progressive"  # curva de resposta
 AIM_RESPONSE   = "aim"          # curva mais precisa quando RMB pressionado
 MAX_VEL        = 1.0
 PRECISION_MULT = 0.35   # multiplicador ao segurar LCtrl
@@ -69,6 +72,7 @@ AIM_MULT       = 0.45   # multiplicador ao segurar RMB (mirar)
 WHEEL_MULT      = 0.12   # multiplicador com roda de armas aberta (movimento lento p/ selecionar)
 HALF_THROTTLE  = 0.25
 TOGGLE_KEY     = "f12"
+SETTLE         = 0.002  # valores abaixo disso = zero (elimina jitter residual)
 
 # Perfis por jogo — auto-switch quando a janela em primeiro plano da janela muda
 PROFILES = {
@@ -150,9 +154,15 @@ state = {
 
 buttons     = {}
 pressed     = set()
-mouse_vel    = {"x": 0.0, "y": 0.0}    # deltas brutos acumulados
-mouse_smooth = {"x": 0.0, "y": 0.0}   # saída EMA suavizada
+mouse_vel    = {"x": 0.0, "y": 0.0}    # deltas brutos acumulados (fallback)
+mouse_smooth = {"x": 0.0, "y": 0.0}   # saída EMA suavizada (fallback)
 _mouse_idle  = 0                       # frames consecutivos sem movimento
+
+# Ghostrol-style: buffer circular de samples (timestamp, dx, dy) para janela de 24ms
+_MOUSE_BUFFER_SIZE = 128
+_MOUSE_WINDOW_MS   = 24.0
+_mouse_samples     = deque(maxlen=_MOUSE_BUFFER_SIZE)
+_last_mouse_time   = 0.0
 mouse_lock   = threading.Lock()
 rs_value     = {"x": 0.0, "y": 0.0}
 _last_mouse  = {"x": None, "y": None}
@@ -340,21 +350,49 @@ def _radial_deadzone(vx, vy, dz):
     return vx / mag * scale, vy / mag * scale
 
 
+def _get_mouse_velocity():
+    """
+    Ghostrol-style: calcula velocidade em px/ms usando janela deslizante de 24ms.
+    Retorna (vx, vy) em px/ms, ou (0, 0) se não há samples.
+    """
+    now = time.time()
+    since = now - (_MOUSE_WINDOW_MS / 1000.0)
+
+    with mouse_lock:
+        # Remove samples antigos
+        while _mouse_samples and _mouse_samples[0][0] <= since:
+            _mouse_samples.popleft()
+
+        sum_x = 0.0
+        sum_y = 0.0
+        for ts, dx, dy in _mouse_samples:
+            sum_x += dx
+            sum_y += dy
+
+    vx = sum_x / _MOUSE_WINDOW_MS   # px/ms
+    vy = sum_y / _MOUSE_WINDOW_MS
+    return vx, vy
+
+
 def update_rs():
     """
-    Pipeline de câmera por frame (60 Hz):
-      1. Lê deltas brutos; aplica cap ±MAX_VEL para evitar overshoot
-      2. Zera velocidade se mouse ficou parado (elimina drift)
-      3. Aplica friction (momentum entre frames)
-      4. EMA smoothing (CronusMax-style)
-      5. Escala por sensibilidade + modificadores (precisão / mira)
-      6. Curva de resposta (progressive normal / aim quando mirando)
+    Pipeline de câmera (Ghostrol-inspired, roda a 120 Hz):
+      0. Troca de perfil a cada ~1s
+      1. Coleta velocity da janela deslizante (px/ms, independente de FPS)
+      2. Detecta mouse parado → zera tudo (elimina drift)
+      3. Aplica friction (momentum)
+      4. EMA time-correct: alpha = 1 - exp(-dt/tau)
+      5. Escala por sensibilidade + modificadores (precisão / mira / wheel)
+      6. Curva de resposta (progressive / enhanced / easing / aim)
       7. Deadzone radial circular
-      8. Anti-deadzone (cancela a deadzone interna do jogo)
-      9. Envia ao right stick
+      8. Anti-deadzone
+      9. Settle threshold (elimina jitter < 0.002)
+     10. Envia ao gamepad
     """
-    global rs_value, _mouse_idle, mouse_smooth
+    global rs_value, _mouse_idle, mouse_smooth, mouse_vel
     _last_profile_check = 0.0
+    _last_rs_time = 0.0
+
     while True:
         # --- 0. troca de perfil a cada ~1s ---
         now = time.time()
@@ -362,48 +400,61 @@ def update_rs():
             _check_profile()
             _last_profile_check = now
 
-        dt = 1.0 / 60.0
+        # dt real desde último frame
+        dt = now - _last_rs_time if _last_rs_time > 0 else 1.0/120.0
+        _last_rs_time = now
+        dt = min(dt, 0.1)   # clamp: max 100ms (evita saltos após lag)
 
-        # --- 1. coleta deltas + cap ---
-        with mouse_lock:
-            raw_x = clamp(mouse_vel["x"], -MAX_VEL / (SENS_X + 1e-6),
-                          MAX_VEL / (SENS_X + 1e-6))
-            raw_y = clamp(mouse_vel["y"], -MAX_VEL / (SENS_Y + 1e-6),
-                          MAX_VEL / (SENS_Y + 1e-6))
+        # --- 1. coleta velocity da janela deslizante ---
+        vel_x_ms, vel_y_ms = _get_mouse_velocity()
 
-            # --- 2. detecta mouse parado ---
-            if raw_x == 0.0 and raw_y == 0.0:
-                _mouse_idle += 1
-            else:
-                _mouse_idle = 0
+        # Converte px/ms → valor -1..1 (precisa de calibração empírica)
+        # FULL_SPEED_AT_50 = 1.0 px/ms → 1.0 no stick (a sens 50)
+        # Com SENS_X=0.20, precisamos de ~5x mais velocidade
+        gain_x = SENS_X * 5.0   # 0.20 * 5 = 1.0 (px/ms → stick)
+        gain_y = SENS_Y * 5.0
+        raw_x = clamp(vel_x_ms * gain_x, -1.0, 1.0)
+        raw_y = clamp(vel_y_ms * gain_y, -1.0, 1.0)
 
-            # zera acúmulo imediatamente quando mouse parou
-            if _mouse_idle >= 1:
+        # --- 2. detecta mouse parado ---
+        if raw_x == 0.0 and raw_y == 0.0:
+            _mouse_idle += 1
+        else:
+            _mouse_idle = 0
+
+        if _mouse_idle >= 2:
+            # zera tudo imediatamente
+            mouse_smooth["x"] = 0.0
+            mouse_smooth["y"] = 0.0
+            with mouse_lock:
                 mouse_vel["x"] = 0.0
                 mouse_vel["y"] = 0.0
-                mouse_smooth["x"] = 0.0
-                mouse_smooth["y"] = 0.0
-            else:
-                # --- 3. friction ---
-                mouse_vel["x"] *= FRICTION
-                mouse_vel["y"] *= FRICTION
-                if abs(mouse_vel["x"]) < 0.005: mouse_vel["x"] = 0.0
-                if abs(mouse_vel["y"]) < 0.005: mouse_vel["y"] = 0.0
+            sx = sy = 0.0
+        else:
+            # --- 3. friction ---
+            raw_x *= FRICTION
+            raw_y *= FRICTION
 
-        # --- 4. EMA smoothing ---
-        a = SMOOTHING
-        mouse_smooth["x"] = a * mouse_smooth["x"] + (1.0 - a) * raw_x
-        mouse_smooth["y"] = a * mouse_smooth["y"] + (1.0 - a) * raw_y
-        sx, sy = mouse_smooth["x"], mouse_smooth["y"]
+            # --- 4. EMA time-correct ---
+            tau = SMOOTHING * SMOOTHING_MAX_TAU_MS / 1000.0   # converte ms → s
+            if tau > 0.0 and dt > 0.0:
+                alpha = 1.0 - math.exp(-dt / tau)
+            else:
+                alpha = 1.0   # sem smoothing
+
+            sx = mouse_smooth["x"] + (raw_x - mouse_smooth["x"]) * alpha
+            sy = mouse_smooth["y"] + (raw_y - mouse_smooth["y"]) * alpha
+            mouse_smooth["x"] = sx
+            mouse_smooth["y"] = sy
 
         # --- 5. sensibilidade + modificadores ---
         mult = 1.0
         if state["precision"]: mult *= PRECISION_MULT
         if state["aim"]:       mult *= AIM_MULT
-        if "c" in pressed:     mult *= WHEEL_MULT   # LB segurado = roda aberta = mouse lento
+        if "c" in pressed:     mult *= WHEEL_MULT
 
-        vx = clamp(sx * SENS_X * mult, -MAX_VEL, MAX_VEL)
-        vy = clamp(sy * SENS_Y * mult, -MAX_VEL, MAX_VEL)
+        vx = sx * mult
+        vy = sy * mult
 
         # --- 6. curva de resposta ---
         curve = AIM_RESPONSE if state["aim"] else None
@@ -418,10 +469,14 @@ def update_rs():
             vx = _apply_anti_deadzone(vx)
             vy = _apply_anti_deadzone(vy)
 
+        # --- 9. settle threshold (elimina jitter residual) ---
+        if abs(vx) < SETTLE: vx = 0.0
+        if abs(vy) < SETTLE: vy = 0.0
+
         rs_value["x"] = vx
         rs_value["y"] = vy
 
-        # --- 9. envia ao gamepad (ignorado se roda de armas aberta — RS controlado pelo WASD) ---
+        # --- 10. envia ao gamepad ---
         if gamepad is not None and state["emulation"]:
             gamepad.right_joystick_float(
                 x_value_float=clamp(vx, -1.0, 1.0),
@@ -429,7 +484,7 @@ def update_rs():
             )
             gamepad.update()
 
-        time.sleep(dt)
+        time.sleep(1.0 / 120.0)   # 120 Hz
 
 
 def set_button(name, val):
@@ -579,9 +634,10 @@ def on_key_release(key):
 
 # ------------------------------------------------------------------ mouse
 def on_mouse_move(x, y):
-    global _last_mouse
+    global _last_mouse, _last_mouse_time
     if _last_mouse["x"] is None:
         _last_mouse["x"] = x; _last_mouse["y"] = y
+        _last_mouse_time = time.time()
         return
     dx = x - _last_mouse["x"]
     dy = y - _last_mouse["y"]
@@ -589,9 +645,12 @@ def on_mouse_move(x, y):
     _last_mouse["y"] = y
     if not state["emulation"] or not state["mouse_captured"]:
         return
+    now = time.time()
     with mouse_lock:
-        mouse_vel["x"] += dx
+        _mouse_samples.append((now, dx, dy))
+        mouse_vel["x"] += dx    # fallback
         mouse_vel["y"] += dy
+    _last_mouse_time = now
 
 
 def on_mouse_click(x, y, button, pressed_flag):
@@ -657,8 +716,9 @@ class App:
             ("DEADZONE_RS", 0.08, 0.00, 0.40, 0.01),
             ("ANTI_DZ",     0.08, 0.00, 0.30, 0.01),
             ("FRICTION",    0.80, 0.50, 0.98, 0.01),
-            ("SMOOTHING",   0.20, 0.00, 0.80, 0.01),
-            ("WHEEL_MULT",  0.12, 0.02, 0.50, 0.01),
+            ("SMOOTHING",     0.20, 0.00, 0.80, 0.01),
+            ("SM_MAX_TAU",    60.0, 0.00, 200.0, 5.0),
+            ("WHEEL_MULT",    0.12, 0.02, 0.50, 0.01),
         ]:
             f = tk.Frame(sliders, bg="#1a1a2e")
             f.pack(side="left", padx=8, expand=True, fill="x")
@@ -669,6 +729,7 @@ class App:
                 "ANTI_DZ":     "ANTI-DEADZONE",
                 "FRICTION":    "FRICTION",
                 "SMOOTHING":   "SMOOTHING",
+                "SM_MAX_TAU":  "SM MAX TAU",
                 "WHEEL_MULT":  "SENS RODA",
             }.get(name, name)
             tk.Label(f, text=lbl_text, fg="#e0e0e0", bg="#1a1a2e",
@@ -900,14 +961,15 @@ class App:
         self.mode_label.config(text="MODO: " + txt, fg=clr)
 
         # sliders → globals
-        global DEADZONE_RS, ANTI_DZ, SENS_X, SENS_Y, FRICTION, SMOOTHING, WHEEL_MULT
-        DEADZONE_RS  = self.sliders["DEADZONE_RS"].get()
-        ANTI_DZ      = self.sliders["ANTI_DZ"].get()
-        SENS_X       = self.sliders["SENS_X"].get()
-        SENS_Y       = self.sliders["SENS_Y"].get()
-        FRICTION     = self.sliders["FRICTION"].get()
-        SMOOTHING    = self.sliders["SMOOTHING"].get()
-        WHEEL_MULT   = self.sliders["WHEEL_MULT"].get()
+        global DEADZONE_RS, ANTI_DZ, SENS_X, SENS_Y, FRICTION, SMOOTHING, SMOOTHING_MAX_TAU_MS, WHEEL_MULT
+        DEADZONE_RS          = self.sliders["DEADZONE_RS"].get()
+        ANTI_DZ              = self.sliders["ANTI_DZ"].get()
+        SENS_X               = self.sliders["SENS_X"].get()
+        SENS_Y               = self.sliders["SENS_Y"].get()
+        FRICTION             = self.sliders["FRICTION"].get()
+        SMOOTHING            = self.sliders["SMOOTHING"].get()
+        SMOOTHING_MAX_TAU_MS  = self.sliders["SM_MAX_TAU"].get()
+        WHEEL_MULT           = self.sliders["WHEEL_MULT"].get()
         # emulacao + mouse capture status
         self.emu_btn.config(
             text="Emulação: " + ("ON" if state["emulation"] else "OFF"),
