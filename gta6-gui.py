@@ -70,7 +70,6 @@ MAX_VEL        = 1.0
 PRECISION_MULT = 0.35   # multiplicador ao segurar LCtrl
 AIM_MULT       = 0.45   # multiplicador ao segurar RMB (mirar)
 WHEEL_MULT      = 0.12   # multiplicador com roda de armas aberta (movimento lento p/ selecionar)
-WHEEL_RADIUS    = 140.0  # pixels para atingir máximo do stick no modo wheel
 HALF_THROTTLE  = 0.25
 TOGGLE_KEY     = "f12"
 SETTLE         = 0.002  # valores abaixo disso = zero (elimina jitter residual)
@@ -167,10 +166,6 @@ _last_mouse_time   = 0.0
 mouse_lock   = threading.Lock()
 rs_value     = {"x": 0.0, "y": 0.0}
 
-# Modo wheel (roda de armas): posição persistente do Right Stick
-wheel_mouse  = {"x": 0.0, "y": 0.0}   # posição acumulada do mouse
-wheel_rs     = {"x": 0.0, "y": 0.0}   # saída do right stick (normalizada)
-_last_mouse  = {"x": None, "y": None}
 gamepad      = None
 log_lines    = []
 log_lock     = threading.Lock()
@@ -413,22 +408,6 @@ def update_rs():
         if now - _last_profile_check > 1.0:
             _check_profile()
             _last_profile_check = now
-        # --- WHEEL MODE: posição persistente do Right Stick ---
-        # Quando C está segurado, o stick mantém a direção mesmo com mouse parado
-        if "c" in pressed and state["emulation"]:
-            vx = wheel_rs["x"]
-            vy = wheel_rs["y"]
-            if gamepad is not None:
-                gamepad.right_joystick_float(
-                    x_value_float=clamp(vx, -1.0, 1.0),
-                    y_value_float=clamp(vy, -1.0, 1.0),
-                )
-                gamepad.update()
-            rs_value["x"] = vx
-            rs_value["y"] = vy
-            time.sleep(1.0 / 120.0)
-            continue
-
         # dt real desde último frame
         dt = now - _last_rs_time if _last_rs_time > 0 else 1.0/120.0
         _last_rs_time = now
@@ -603,11 +582,6 @@ def on_key_press(key):
         log("[modo] " + state["mode"])
         return
 
-    # Início do modo wheel: reseta posição do mouse/stick
-    if k == "c" and "c" not in pressed:
-        wheel_mouse["x"] = 0.0; wheel_mouse["y"] = 0.0
-        wheel_rs["x"] = 0.0; wheel_rs["y"] = 0.0
-
     pressed.add(k)
 
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
@@ -649,11 +623,6 @@ def on_key_release(key):
 
     pressed.discard(k)
 
-    # Fim do modo wheel: reseta posição
-    if k == "c":
-        wheel_mouse["x"] = 0.0; wheel_mouse["y"] = 0.0
-        wheel_rs["x"] = 0.0; wheel_rs["y"] = 0.0
-
 
     if k in ("ctrl_l", "ctrl", "left_ctrl"):
         state["precision"] = False
@@ -694,14 +663,6 @@ def on_mouse_move(x, y):
     _last_mouse["x"] = x
     _last_mouse["y"] = y
     if not state["emulation"] or not state["mouse_captured"]:
-        return
-
-    # Modo wheel: posição persistente do Right Stick
-    if "c" in pressed and state["emulation"]:
-        wheel_mouse["x"] += dx
-        wheel_mouse["y"] -= dy   # corrige eixo vertical (mouse Y = invertido)
-        wheel_rs["x"] = clamp(wheel_mouse["x"] / WHEEL_RADIUS, -1.0, 1.0)
-        wheel_rs["y"] = clamp(wheel_mouse["y"] / WHEEL_RADIUS, -1.0, 1.0)
         return
 
     now = time.time()
