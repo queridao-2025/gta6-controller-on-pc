@@ -192,6 +192,14 @@ KEY_MAP = {
     # --- D-Pad ---
     "1": "DPAD_UP", "2": "DPAD_DOWN", "3": "DPAD_LEFT", "4": "DPAD_RIGHT",
     "e": "DPAD_RIGHT", "t": "DPAD_RIGHT",
+    # --- weapon wheel D-Pad (navegação) ---
+    "up":       "DPAD_UP",
+    "down":     "DPAD_DOWN",
+    "left":     "DPAD_LEFT",
+    "right":    "DPAD_RIGHT",
+    "n":        "RB",             # N — tap RB (trocar aba Weapons/Items)
+    "page_up":   "DPAD_UP",       # ciclo sub-item cima
+    "page_down": "DPAD_DOWN",     # ciclo sub-item baixo
     # --- sprint ---
     "rshift": "L3", "shift": "L3", "shift_l": "L3",
 }
@@ -270,6 +278,7 @@ KEY_DISPLAY_TO_NORMAL = {
     "Z":"z","C":"c","V":"v","B":"b","N":"n","M":"m",
     ",": ",", ".": ".", "/": "/", "RCtrl": "ctrl_r", "Space": "space",
     "Up":"up","Down":"down","Left":"left","Right":"right",
+    "PgUp":"page_up","PgDn":"page_down",
 }
 
 # ------------------------------------------------------------------ helpers
@@ -487,16 +496,27 @@ def update_rs():
         time.sleep(1.0 / 120.0)   # 120 Hz
 
 
-def set_button(name, val):
+_button_refs = {}   # button_name → count of active sources (keys/mouse)
+
+def set_button(name, val, source=None):
+    """Press/release button with ref-count. Multiple keys can map to same button."""
     if gamepad is None or not state["emulation"]:
         return
     btn = buttons.get(name)
     if btn is None:
         return
+
+    if source is None:
+        source = "default"
+
     if val:
-        gamepad.press_button(button=btn)
+        _button_refs[name] = _button_refs.get(name, 0) + 1
+        if _button_refs[name] == 1:
+            gamepad.press_button(button=btn)
     else:
-        gamepad.release_button(button=btn)
+        _button_refs[name] = max(0, _button_refs.get(name, 0) - 1)
+        if _button_refs[name] == 0:
+            gamepad.release_button(button=btn)
     gamepad.update()
 
 
@@ -583,9 +603,9 @@ def on_key_press(key):
             car_steer = 1.0
         if k in ("a", "d", "left", "right"):
             set_left_stick(car_steer, 0.0)
-        if k == "space": set_button("A", True)
+        if k == "space": set_button("A", True, source="key:space")
         if k == "v":     set_trigger("RT", HALF_THROTTLE)
-        if k in KEY_MAP: set_button(KEY_MAP[k], True)
+        if k in KEY_MAP: set_button(KEY_MAP[k], True, source=f"key:{k}")
         return
 
     if k in MOVE_KEYS:
@@ -593,7 +613,7 @@ def on_key_press(key):
         y = ( 1.0 if "w" in pressed else 0.0) + (-1.0 if "s" in pressed else 0.0)
         set_left_stick(x, y)
     if k == "v":     set_trigger("RT", HALF_THROTTLE)
-    if k in KEY_MAP: set_button(KEY_MAP[k], True)
+    if k in KEY_MAP: set_button(KEY_MAP[k], True, source=f"key:{k}")
 
 
 def on_key_release(key):
@@ -620,9 +640,9 @@ def on_key_release(key):
             x = (-1.0 if "a" in pressed or "left" in pressed else 0.0) + \
                 ( 1.0 if "d" in pressed or "right" in pressed else 0.0)
             set_left_stick(x, 0.0)
-        if k == "space": set_button("A", False)
+        if k == "space": set_button("A", False, source="key:space")
         if k == "v":     set_trigger("RT", 0.0)
-        if k in KEY_MAP: set_button(KEY_MAP[k], False)
+        if k in KEY_MAP: set_button(KEY_MAP[k], False, source=f"key:{k}")
         return
 
     if k in MOVE_KEYS:
@@ -630,7 +650,7 @@ def on_key_release(key):
         y = ( 1.0 if "w" in pressed else 0.0) + (-1.0 if "s" in pressed else 0.0)
         set_left_stick(x, y)
     if k == "v":     set_trigger("RT", 0.0)
-    if k in KEY_MAP: set_button(KEY_MAP[k], False)
+    if k in KEY_MAP: set_button(KEY_MAP[k], False, source=f"key:{k}")
 
 # ------------------------------------------------------------------ mouse
 def on_mouse_move(x, y):
@@ -663,20 +683,22 @@ def on_mouse_click(x, y, button, pressed_flag):
         state["aim"] = pressed_flag
         set_trigger("LT", 1.0 if pressed_flag else 0.0)
     elif btn == "middle":
-        set_button("B", pressed_flag)
+        set_button("R3", pressed_flag, source=f"mouse:{btn}")
     elif btn == "x1":
-        set_button("A", pressed_flag)
+        set_button("RB", pressed_flag, source=f"mouse:{btn}")
     elif btn == "x2":
-        set_button("RB", pressed_flag)
+        set_button("A", pressed_flag, source=f"mouse:{btn}")
 
 
 def on_mouse_scroll(x, y, dx, dy):
     if not state["emulation"] or not state["mouse_captured"]:
         return
     if dy > 0:
-        set_button("LB", True);  time.sleep(0.05); set_button("LB", False)
+        # scroll up = LT (item anterior)
+        set_trigger("LT", 1.0); time.sleep(0.05); set_trigger("LT", 0.0)
     elif dy < 0:
-        set_button("RB", True);  time.sleep(0.05); set_button("RB", False)
+        # scroll down = RT (próximo item)
+        set_trigger("RT", 1.0); time.sleep(0.05); set_trigger("RT", 0.0)
 
 # ------------------------------------------------------------------ GUI
 class App:
@@ -810,7 +832,7 @@ class App:
              ("Ins","Mapa"),("P","Mapa"),("O","Menu"),("LWin","Captura")],
             [("`",""),("1","D-Cima"),("2","D-Baixo"),("3","D-Esq"),("4","D-Dir"),
              ("5",""),("6",""),("7",""),("8",""),("9",""),("0",""),
-             ("-",""),("=",""),("Bksp","B")],
+             ("-",""),("=",""),("Bksp","B"),("PgUp","Ciclo+"),("PgDn","Ciclo-")],
             [("Tab",""),("Q","RB Cobertura"),("W","LS Cima"),("E","D-Dir"),("R","X Recarrega"),
              ("T","D-Dir"),("Y",""),("U",""),("I","BACK"),
              ("[",""),("'",""),("Enter","A")],
