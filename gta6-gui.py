@@ -1608,7 +1608,18 @@ CORAL = "#ef6f5e"
 INDIGO = "#5b6fd6"
 VIOLET = "#9a6bd1"
 OLIVE = "#7da34f"
-BRONZE = "#c08a4a"
+SURFACE = "#1e2532"
+SURFACE_HOVER = "#262f3e"
+BORDER = "#334054"
+ACCENT = "#62d6a8"
+ACCENT_DIM = "#4aa87f"
+SUCCESS = "#5eead4"
+WARNING = "#fbbf24"
+ERROR = "#ef4444"
+RING = "#5b6fd6"
+GAP = 8
+CARD_PAD = 12
+
 
 CAT_COLORS = {
     "none": "#1f2533", "move": "#2c6d70", "button": "#3b4b84",
@@ -1680,9 +1691,9 @@ CURVE_LABELS = {"linear": "Linear", "progressive": "Progressiva",
 MODE_LABELS = {"foot": "A pé", "car": "No carro"}
 
 
-def _btn(parent, text, command, bg=PANEL2, fg=TEXT, **kw):
+def _btn(parent, text, command, bg=SURFACE_HOVER, fg=TEXT, **kw):
     return tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
-                     activebackground=EDGE, activeforeground=TEXT, relief="flat",
+                     activebackground=ACCENT_DIM, activeforeground=TEXT, relief="flat",
                      bd=0, padx=12, pady=6, cursor="hand2", font=(FONT, 10), **kw)
 
 
@@ -1742,25 +1753,34 @@ class App:
     # ---------------------------------------------------------------- header
     def _build_header(self):
         h = tk.Frame(self.root, bg=BG)
-        h.pack(fill="x", padx=14, pady=(12, 10))
+        h.pack(fill="x", padx=CARD_PAD, pady=(12, 8))
+        h.grid_columnconfigure(1, weight=1)
+
+        # Título e subtítulo à esquerda
         title = tk.Frame(h, bg=BG)
-        title.pack(side="left")
+        title.grid(row=0, column=0, sticky="w")
         tk.Label(title, text="Xbox Virtual Controller", font=(FONT, 17, "bold"),
                  fg=TEXT, bg=BG).pack(anchor="w")
-        self.subtitle = tk.Label(title, text="", font=(FONT, 10), fg=MUTED, bg=BG)
-        self.subtitle.pack(anchor="w")
+        self.subtitle = tk.Label(title, text="GTA VI / FiveM Roleplay — Controle Xbox virtual",
+                                 font=(FONT, 10), fg=MUTED, bg=BG)
+        self.subtitle.pack(anchor="w", pady=(2, 0))
 
+        # Status cards no centro
         chips = tk.Frame(h, bg=BG)
-        chips.pack(side="left", padx=26)
+        chips.grid(row=0, column=1, sticky="e", padx=(26, 0))
         self.chips = {}
         for key in ("emu", "mode", "mouse", "game", "input"):
-            lab = tk.Label(chips, text="", font=(FONT, 10, "bold"), padx=11, pady=5,
-                           fg=BG, bg=MUTED)
-            lab.pack(side="left", padx=3)
+            card = tk.Frame(chips, bg=SURFACE, highlightbackground=BORDER,
+                            highlightthickness=1, bd=0)
+            card.pack(side="left", padx=3)
+            lab = tk.Label(card, text="", font=(FONT, 9, "bold"), padx=10, pady=4,
+                           fg=TEXT, bg=SURFACE)
+            lab.pack()
             self.chips[key] = lab
 
+        # Ações à direita
         right = tk.Frame(h, bg=BG)
-        right.pack(side="right")
+        right.grid(row=0, column=2, sticky="e")
         self.profile_var = tk.StringVar(value=PROFILES[S["profile"]]["label"])
         cb = ttk.Combobox(right, textvariable=self.profile_var, state="readonly", width=24,
                           values=[p["label"] for p in PROFILES.values()],
@@ -1777,35 +1797,42 @@ class App:
 
     # ------------------------------------------------------------ coluna esq.
     def _section(self, parent, text):
-        tk.Label(parent, text=text, font=(FONT, 11, "bold"), fg=TEXT, bg=BG).pack(anchor="w", pady=(0, 6))
+        """Cria uma seção em card com título e borda."""
+        card = tk.Frame(parent, bg=SURFACE, highlightbackground=BORDER,
+                        highlightthickness=1, bd=0)
+        card.pack(fill="x", pady=(0, GAP))
+        tk.Label(card, text=text, font=(FONT, 11, "bold"), fg=TEXT, bg=SURFACE,
+                 padx=CARD_PAD, pady=(CARD_PAD, 6)).pack(anchor="w")
+        body = tk.Frame(card, bg=SURFACE)
+        body.pack(fill="both", expand=True, padx=CARD_PAD, pady=(0, CARD_PAD))
+        return body
 
     def _build_left(self, left):
-        self._section(left, "Teclado")
-        self.kb = tk.Canvas(left, bg=PANEL, highlightthickness=0, height=330)
+        kb_body = self._section(left, "Teclado")
+        self.kb = tk.Canvas(kb_body, bg=SURFACE, highlightthickness=0, height=330)
         self.kb.pack(fill="x")
         self.kb.bind("<Configure>", self._on_kb_configure)
 
-        bar = tk.Frame(left, bg=BG)
+        bar = tk.Frame(kb_body, bg=SURFACE)
         bar.pack(fill="x", pady=(8, 0))
         for cat, name in CAT_NAMES:
-            f = tk.Frame(bar, bg=BG)
+            f = tk.Frame(bar, bg=SURFACE)
             f.pack(side="left", padx=(0, 14))
             tk.Frame(f, bg=CAT_COLORS[cat], width=12, height=12).pack(side="left", padx=(0, 5))
-            tk.Label(f, text=name, fg=MUTED, bg=BG, font=(FONT, 9)).pack(side="left")
+            tk.Label(f, text=name, fg=MUTED, bg=SURFACE, font=(FONT, 9)).pack(side="left")
         tk.Frame(bar, bg=AMBER, width=12, height=12).pack(side="left", padx=(8, 5))
-        tk.Label(bar, text="Pressionada", fg=MUTED, bg=BG, font=(FONT, 9)).pack(side="left")
+        tk.Label(bar, text="Pressionada", fg=MUTED, bg=SURFACE, font=(FONT, 9)).pack(side="left")
 
-        self.info = tk.Label(left, text="Passe o mouse sobre uma tecla. Clique para trocar a função.",
-                             fg=TEXT, bg=PANEL, anchor="w", padx=12, pady=8, font=(FONT, 10))
+        self.info = tk.Label(kb_body, text="Passe o mouse sobre uma tecla. Clique para trocar a função.",
+                             fg=TEXT, bg=SURFACE, anchor="w", padx=0, pady=8, font=(FONT, 10))
         self.info.pack(fill="x", pady=(8, 10))
 
-        self._section(left, "Registro")
-        lf = tk.Frame(left, bg=PANEL)
-        lf.pack(fill="both", expand=True)
-        self.log_text = tk.Text(lf, height=6, bg=PANEL, fg=TEXT, bd=0, padx=10, pady=8,
+        log_body = self._section(left, "Registro")
+        self.log_text = tk.Text(log_body, height=6, bg=PANEL, fg=TEXT, bd=0, padx=10, pady=8,
                                 font=(MONO, 10), state="disabled", wrap="word",
                                 insertbackground=TEXT, highlightthickness=0)
         self.log_text.pack(fill="both", expand=True)
+
 
     def _on_kb_configure(self, event):
         if self._resize_job is not None:
@@ -1863,29 +1890,30 @@ class App:
 
     # ------------------------------------------------------------ coluna dir.
     def _build_right(self, right):
-        self._section(right, "Controle virtual")
-        self._build_pad_canvas(right)
+        pad_body = self._section(right, "Controle virtual")
+        self._build_pad_canvas(pad_body)
         nb = ttk.Notebook(right)
-        nb.pack(fill="both", expand=True, pady=(12, 0))
+        nb.pack(fill="both", expand=True, pady=(GAP, 0))
         self._tab_mouse(nb)
         self._tab_sliders(nb, "Câmera", CAMERA_SLIDERS, with_curve=True)
         self._tab_sliders(nb, "Roda e carro", MOVE_SLIDERS)
         self._tab_options(nb)
 
     def _tab_frame(self, nb, title):
-        f = tk.Frame(nb, bg=PANEL2, padx=14, pady=12)
+        f = tk.Frame(nb, bg=SURFACE, padx=CARD_PAD, pady=CARD_PAD)
         nb.add(f, text=title)
         return f
+
 
     def _tab_mouse(self, nb):
         f = self._tab_frame(nb, "Mouse")
         tk.Label(f, text="Movimento do mouse = analógico direito (câmera).\n"
                          "Com a roda aberta (segurar Tab), o mouse aponta e mantém a seleção.",
-                 fg=MUTED, bg=PANEL2, justify="left", font=(FONT, 9)).pack(anchor="w", pady=(0, 10))
+                 fg=MUTED, bg=SURFACE, justify="left", font=(FONT, 9)).pack(anchor="w", pady=(0, 10))
         for name, label in MOUSE_ROWS:
-            row = tk.Frame(f, bg=PANEL2)
-            row.pack(fill="x", pady=2)
-            tk.Label(row, text=label, fg=TEXT, bg=PANEL2, width=22, anchor="w",
+            row = tk.Frame(f, bg=SURFACE)
+            row.pack(fill="x", pady=3)
+            tk.Label(row, text=label, fg=TEXT, bg=SURFACE, width=22, anchor="w",
                      font=(FONT, 10)).pack(side="left")
             b = tk.Button(row, text="", anchor="w", bg=PANEL, fg=TEXT, relief="flat", bd=0,
                           padx=10, pady=4, cursor="hand2", activebackground=EDGE,
@@ -1900,38 +1928,33 @@ class App:
         f.grid_columnconfigure(1, weight=1)
         r = 0
         for i, (key, label, lo, hi, res) in enumerate(specs):
-            cell = tk.Frame(f, bg=PANEL2)
+            cell = tk.Frame(f, bg=SURFACE)
             cell.grid(row=i // 2, column=i % 2, sticky="ew", padx=6, pady=3)
-            tk.Label(cell, text=label, fg=TEXT, bg=PANEL2, font=(FONT, 9)).pack(anchor="w")
+            tk.Label(cell, text=label, fg=TEXT, bg=SURFACE, font=(FONT, 9)).pack(anchor="w")
             s = tk.Scale(cell, from_=lo, to=hi, resolution=res, orient="horizontal",
-                         bg=PANEL2, fg=TEXT, troughcolor=PANEL, highlightthickness=0,
-                         bd=0, sliderrelief="flat", activebackground=AMBER, length=170,
+                         bg=SURFACE, fg=TEXT, troughcolor=PANEL, highlightthickness=0,
+                         bd=0, sliderrelief="flat", activebackground=ACCENT, length=170,
                          font=(FONT, 8))
             s.set(S[key])
             s.config(command=lambda v, k=key: S.__setitem__(k, float(v)))
             s.pack(fill="x")
             r = i // 2 + 1
         if with_curve:
-            # Botão de modo de câmera
-            mode_frame = tk.Frame(f, bg=PANEL2)
+            mode_frame = tk.Frame(f, bg=SURFACE)
             mode_frame.grid(row=r, column=0, columnspan=2, sticky="ew", padx=6, pady=(10, 5))
-            tk.Label(mode_frame, text="Modo da câmera:", fg=TEXT, bg=PANEL2,
+            tk.Label(mode_frame, text="Modo da câmera:", fg=TEXT, bg=SURFACE,
                      font=(FONT, 10, "bold")).pack(side="left")
             self.direct_var = tk.BooleanVar(value=S["DIRECT_MODE"])
             rb_direct = tk.Radiobutton(mode_frame, text="Direto (lockpick)", variable=self.direct_var,
                                         value=True, command=lambda: self._set_direct_mode(True),
-                                        bg=PANEL2, fg=TEXT, selectcolor=PANEL, activebackground=PANEL2,
+                                        bg=SURFACE, fg=TEXT, selectcolor=PANEL, activebackground=SURFACE,
                                         activeforeground=TEXT, font=(FONT, 10))
             rb_direct.pack(side="left", padx=(10, 5))
             rb_velocity = tk.Radiobutton(mode_frame, text="Velocidade (câmera)", variable=self.direct_var,
                                          value=False, command=lambda: self._set_direct_mode(False),
-                                         bg=PANEL2, fg=TEXT, selectcolor=PANEL, activebackground=PANEL2,
+                                         bg=SURFACE, fg=TEXT, selectcolor=PANEL, activebackground=SURFACE,
                                          activeforeground=TEXT, font=(FONT, 10))
             rb_velocity.pack(side="left", padx=5)
-            
-            cf = tk.Frame(f, bg=PANEL2)
-            cf.grid(row=r+1, column=0, columnspan=2, sticky="ew", padx=6, pady=(10, 0))
-
 
     def _set_direct_mode(self, enabled):
         S["DIRECT_MODE"] = enabled
@@ -1950,20 +1973,20 @@ class App:
             v = tk.BooleanVar(value=S[key])
             self.opt_vars[key] = v
             tk.Checkbutton(f, text=text, variable=v, command=lambda k=key: self._set_opt(k),
-                           bg=PANEL2, fg=TEXT, selectcolor=PANEL, activebackground=PANEL2,
-                           activeforeground=TEXT, anchor="w", font=(FONT, 10)).pack(fill="x", pady=1)
+                           bg=SURFACE, fg=TEXT, selectcolor=PANEL, activebackground=SURFACE,
+                           activeforeground=TEXT, anchor="w", font=(FONT, 10)).pack(fill="x", pady=3)
         tk.Label(f, text="Títulos de janela do jogo (separados por vírgula)", fg=TEXT,
-                 bg=PANEL2, font=(FONT, 9)).pack(anchor="w", pady=(12, 2))
+                 bg=SURFACE, font=(FONT, 9)).pack(anchor="w", pady=(12, 2))
         self.pat_var = tk.StringVar(value=S["game_patterns"])
         e = tk.Entry(f, textvariable=self.pat_var, bg=PANEL, fg=TEXT, insertbackground=TEXT,
                      relief="flat", font=(FONT, 10))
         e.pack(fill="x", ipady=4)
         e.bind("<FocusOut>", self._set_patterns)
         e.bind("<Return>", self._set_patterns)
-        bf = tk.Frame(f, bg=PANEL2)
+        bf = tk.Frame(f, bg=SURFACE)
         bf.pack(fill="x", pady=(12, 8))
         _btn(bf, "Restaurar teclas do perfil", self._reset_profile, bg=PANEL).pack(side="left")
-        tk.Label(f, justify="left", fg=MUTED, bg=PANEL2, font=(FONT, 9),
+        tk.Label(f, justify="left", fg=MUTED, bg=SURFACE, font=(FONT, 9),
                  text="F8 ou Scroll Lock: liga/desliga   |   Pause: mouse livre (menus)\n"
                       "F12: a pé/carro   |   Ctrl direito: caminhar   |   Enter/Esc: sai do chat"
                  ).pack(anchor="w")
