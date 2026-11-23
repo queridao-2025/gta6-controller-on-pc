@@ -1906,11 +1906,13 @@ class App:
             self.draw_keyboard(max(30.0, min(58.0, (self.kb.winfo_width() - 24) / KB_UNITS)))
         elif not self._kb_drawn:
             self.root.after(50, self._ensure_kb_drawn)
-
-
-
-
-
+    def _on_kb_configure(self, event):
+        if self._resize_job is not None:
+            try:
+                self.root.after_cancel(self._resize_job)
+            except Exception:
+                pass
+        self._resize_job = self.root.after(60, lambda w=event.width: self._redraw_kb(w))
 
     def _redraw_kb(self, width):
         unit = max(30.0, min(58.0, (width - 24) / KB_UNITS))
