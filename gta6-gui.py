@@ -1617,41 +1617,59 @@ class Engine:
 
 
 # ======================================================================== GUI
-BG = "#11141b"
-PANEL = "#181d28"
-PANEL2 = "#222939"
-EDGE = "#2f384c"
-TEXT = "#e6eaf2"
-MUTED = "#8a94a8"
-AMBER = "#f2b432"
-TEAL = "#38b2a6"
-CORAL = "#ef6f5e"
-INDIGO = "#5b6fd6"
-VIOLET = "#9a6bd1"
-OLIVE = "#7da34f"
-BRONZE = "#c08a4a"
-SURFACE = "#1e2532"
-SURFACE_HOVER = "#262f3e"
-BORDER = "#334054"
-ACCENT = "#62d6a8"
-ACCENT_DIM = "#4aa87f"
-SUCCESS = "#5eead4"
-WARNING = "#fbbf24"
-ERROR = "#ef4444"
-RING = "#5b6fd6"
-GAP = 8
-CARD_PAD = 12
+# Paleta moderna e profissional — tons escuros com acentos vivos
+BG = "#0f121c"            # fundo principal (quase preto)
+PANEL = "#161a27"          # painéis secundários
+PANEL2 = "#1f2433"         # superfície de entrada/ativos
+EDGE = "#2d3446"            # bordas sutis
+TEXT = "#e8ecf5"            # texto primário
+MUTED = "#94a3b8"           # texto secundário
+DIM = "#64748b"             # texto desabilitado/sutil
+AMBER = "#f59e0b"           # aviso / atenção
+TEAL = "#22d3ee"             # info / conectividade
+CORAL = "#fb7185"           # erro / perigo
+INDIGO = "#6366f1"          # ação primária
+VIOLET = "#a855f7"          # modo especial
+OLIVE = "#84cc16"           # sucesso / ativo
+BRONZE = "#d97706"          # modo direto / alerta
+SURFACE = "#1c2130"         # cards
+SURFACE_HOVER = "#252a3b"   # cards hover
+BORDER = "#334054"           # bordas dos cards
+ACCENT = "#22d3ee"           # destaque principal
+ACCENT_DIM = "#155e75"       # destaque escuro
+SUCCESS = "#34d399"          # confirmação
+WARNING = "#fbbf24"          # alerta
+ERROR = "#f87171"           # erro
+RING = "#6366f1"            # anel de foco
+GAP = 10
+CARD_PAD = 14
+FONT = "Segoe UI"
+FONT_BOLD = "Segoe UI Semibold"
+MONO = "Consolas"
 
+# Estados de conexão / status
+STATUS_ON = OLIVE
+STATUS_OFF = DIM
+STATUS_WARN = AMBER
+STATUS_ERR = CORAL
 
 CAT_COLORS = {
-    "none": "#1f2533", "move": "#2c6d70", "button": "#3b4b84",
-    "trigger": "#6a4a8c", "dpad": "#58763f", "macro": "#8a5f33",
+    "foot": TEAL,
+    "car": INDIGO,
+    "menu": VIOLET,
+    "system": OLIVE,
+    "mouse": BRONZE,
 }
-CAT_NAMES = [("move", "Movimento"), ("button", "Botões"), ("trigger", "Gatilhos e ombros"),
-             ("dpad", "D-Pad"), ("macro", "Macros e alternadores"), ("none", "Sem função")]
 
-FONT = "Segoe UI"
-MONO = "Consolas"
+CAT_NAMES = [
+    ("foot", "A pé"),
+    ("car", "No carro"),
+    ("menu", "Menu"),
+    ("system", "Sistema"),
+    ("mouse", "Mouse"),
+]
+
+
 
 KB_UNITS = 18.5
 KB_ROWS = [
@@ -1712,11 +1730,23 @@ CURVE_LABELS = {"linear": "Linear", "progressive": "Progressiva",
                 "enhanced": "Reforçada", "easing_quadratic": "Suave nas pontas"}
 MODE_LABELS = {"foot": "A pé", "car": "No carro"}
 
+def _btn(parent, text, command, bg=SURFACE_HOVER, fg=TEXT, hover=None, **kw):
+    """Botão moderno com efeito hover."""
+    if hover is None:
+        hover = ACCENT_DIM if bg == SURFACE_HOVER else bg
+    b = tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
+                  activebackground=hover, activeforeground=TEXT, relief="flat",
+                  bd=0, padx=14, pady=8, cursor="hand2",
+                  font=(FONT_BOLD, 10), **kw)
 
-def _btn(parent, text, command, bg=SURFACE_HOVER, fg=TEXT, **kw):
-    return tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
-                     activebackground=ACCENT_DIM, activeforeground=TEXT, relief="flat",
-                     bd=0, padx=12, pady=6, cursor="hand2", font=(FONT, 10), **kw)
+    def _enter(_e):
+        b.configure(bg=hover)
+    def _leave(_e):
+        b.configure(bg=bg)
+    b.bind("<Enter>", _enter)
+    b.bind("<Leave>", _leave)
+    return b
+
 
 
 class App:
@@ -1724,8 +1754,8 @@ class App:
         self.root = root
         self.eng = engine
         root.title(APP_TITLE)
-        root.geometry("1340x840")
-        root.minsize(1120, 720)
+        root.geometry("1400x880")
+        root.minsize(1180, 760)
         root.configure(bg=BG)
         self._sig = None
         self._key_fill = {}
@@ -1737,17 +1767,7 @@ class App:
         self.mouse_btns = {}
         self._style()
         self._build_header()
-        body = tk.Frame(root, bg=BG)
-        body.pack(fill="both", expand=True, padx=14, pady=(0, 12))
-        body.grid_columnconfigure(0, weight=1)
-        body.grid_columnconfigure(1, weight=0, minsize=430)
-        body.grid_rowconfigure(0, weight=1)
-        left = tk.Frame(body, bg=BG)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        right = tk.Frame(body, bg=BG)
-        right.grid(row=0, column=1, sticky="ns")
-        self._build_left(left)
-        self._build_right(right)
+        self._build_body()
         self.update_ui()
 
     # ---------------------------------------------------------------- estilo
@@ -1759,8 +1779,8 @@ class App:
             pass
         st.configure("TNotebook", background=BG, borderwidth=0)
         st.configure("TNotebook.Tab", background=PANEL, foreground=MUTED,
-                     padding=(14, 7), font=(FONT, 10), borderwidth=0)
-        st.map("TNotebook.Tab", background=[("selected", PANEL2)],
+                     padding=(16, 10), font=(FONT_BOLD, 10), borderwidth=0)
+        st.map("TNotebook.Tab", background=[("selected", SURFACE)],
                foreground=[("selected", TEXT)])
         st.configure("TCombobox", fieldbackground=PANEL2, background=PANEL2,
                      foreground=TEXT, arrowcolor=TEXT, bordercolor=EDGE,
@@ -1775,27 +1795,26 @@ class App:
     # ---------------------------------------------------------------- header
     def _build_header(self):
         h = tk.Frame(self.root, bg=BG)
-        h.pack(fill="x", padx=CARD_PAD, pady=(12, 8))
+        h.pack(fill="x", padx=CARD_PAD, pady=(14, 10))
         h.grid_columnconfigure(1, weight=1)
 
-        # Título e subtítulo à esquerda
+        # Título à esquerda
         title = tk.Frame(h, bg=BG)
         title.grid(row=0, column=0, sticky="w")
-        tk.Label(title, text="Xbox Virtual Controller", font=(FONT, 17, "bold"),
+        tk.Label(title, text="GTA6 Controller", font=(FONT_BOLD, 20),
                  fg=TEXT, bg=BG).pack(anchor="w")
-        self.subtitle = tk.Label(title, text="GTA VI / FiveM Roleplay — Controle Xbox virtual",
-                                 font=(FONT, 10), fg=MUTED, bg=BG)
-        self.subtitle.pack(anchor="w", pady=(2, 0))
+        tk.Label(title, text="Emulador de controle Xbox para GTA V / FiveM",
+                 font=(FONT, 10), fg=MUTED, bg=BG).pack(anchor="w", pady=(2, 0))
 
         # Status cards no centro
         chips = tk.Frame(h, bg=BG)
-        chips.grid(row=0, column=1, sticky="e", padx=(26, 0))
+        chips.grid(row=0, column=1, sticky="e", padx=(30, 0))
         self.chips = {}
         for key in ("emu", "mode", "mouse", "game", "input"):
             card = tk.Frame(chips, bg=SURFACE, highlightbackground=BORDER,
-                            highlightthickness=1, bd=0)
-            card.pack(side="left", padx=3)
-            lab = tk.Label(card, text="", font=(FONT, 9, "bold"), padx=10, pady=4,
+                            highlightthickness=1, bd=0, padx=12, pady=6)
+            card.pack(side="left", padx=4)
+            lab = tk.Label(card, text="", font=(FONT_BOLD, 9), padx=0, pady=0,
                            fg=TEXT, bg=SURFACE)
             lab.pack()
             self.chips[key] = lab
@@ -1804,18 +1823,37 @@ class App:
         right = tk.Frame(h, bg=BG)
         right.grid(row=0, column=2, sticky="e")
         self.profile_var = tk.StringVar(value=PROFILES[S["profile"]]["label"])
-        cb = ttk.Combobox(right, textvariable=self.profile_var, state="readonly", width=24,
+        cb = ttk.Combobox(right, textvariable=self.profile_var, state="readonly", width=26,
                           values=[p["label"] for p in PROFILES.values()],
                           font=(FONT, 10))
-        cb.pack(side="left", padx=(0, 8))
+        cb.pack(side="left", padx=(0, 10))
         cb.bind("<<ComboboxSelected>>", self._on_profile)
         self.btn_emu = _btn(right, "Emulação", self._toggle_emu)
-        self.btn_emu.pack(side="left", padx=3)
+        self.btn_emu.pack(side="left", padx=4)
         self.btn_mode = _btn(right, "Modo", self._toggle_mode)
-        self.btn_mode.pack(side="left", padx=3)
+        self.btn_mode.pack(side="left", padx=4)
         self.btn_menu = _btn(right, "Mouse livre", self._toggle_menu)
-        self.btn_menu.pack(side="left", padx=3)
-        _btn(right, "Salvar", self._save, bg=INDIGO).pack(side="left", padx=(3, 0))
+        self.btn_menu.pack(side="left", padx=4)
+        _btn(right, "Salvar", self._save, bg=INDIGO).pack(side="left", padx=(4, 0))
+
+    # ---------------------------------------------------------------- body
+    def _build_body(self):
+        body = tk.Frame(self.root, bg=BG)
+        body.pack(fill="both", expand=True, padx=CARD_PAD, pady=(0, CARD_PAD))
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=0, minsize=460)
+        body.grid_rowconfigure(0, weight=1)
+
+        left = tk.Frame(body, bg=BG)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        right = tk.Frame(body, bg=BG)
+        right.grid(row=0, column=1, sticky="ns")
+
+        self._build_left(left)
+        self._build_right(right)
+        self.update_ui()
+
+
 
     # ------------------------------------------------------------ coluna esq.
     def _section(self, parent, text):
@@ -2210,7 +2248,6 @@ class App:
             self._chip("input", "Caminhando", AMBER)
         else:
             self._chip("input", "Entrada normal", MUTED)
-        self.subtitle.config(text=PROFILES[S["profile"]]["label"])
         self.btn_emu.config(text="Desligar emulação" if emu else "Ligar emulação")
         self.btn_mode.config(text="Modo: " + MODE_LABELS[state["mode"]])
         self.btn_menu.config(text="Voltar ao jogo" if state["menu_mode"] else "Mouse livre")
