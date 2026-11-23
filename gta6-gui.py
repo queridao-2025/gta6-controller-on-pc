@@ -1997,21 +1997,27 @@ class App:
         r = 0
         for i, (key, label, lo, hi, res) in enumerate(specs):
             cell = tk.Frame(f, bg=SURFACE)
-            cell.grid(row=i // 2, column=i % 2, sticky="ew", padx=6, pady=3)
-            tk.Label(cell, text=label, fg=TEXT, bg=SURFACE, font=(FONT, 9)).pack(anchor="w")
+            cell.grid(row=i // 2, column=i % 2, sticky="ew", padx=6, pady=4)
+            cell.grid_columnconfigure(1, weight=1)
+            header = tk.Frame(cell, bg=SURFACE)
+            header.pack(fill="x")
+            tk.Label(header, text=label, fg=TEXT, bg=SURFACE, font=(FONT_BOLD, 9)).pack(side="left")
+            val_lab = tk.Label(header, text=f"{S[key]:.2f}", fg=ACCENT, bg=SURFACE,
+                               font=(FONT_BOLD, 9), width=6, anchor="e")
+            val_lab.pack(side="right")
             s = tk.Scale(cell, from_=lo, to=hi, resolution=res, orient="horizontal",
                          bg=SURFACE, fg=TEXT, troughcolor=PANEL, highlightthickness=0,
-                         bd=0, sliderrelief="flat", activebackground=ACCENT, length=170,
-                         font=(FONT, 8))
+                         bd=0, sliderrelief="flat", activebackground=ACCENT,
+                         length=170, font=(FONT, 8),
+                         command=lambda v, k=key, vl=val_lab: self._on_slider(v, k, vl))
             s.set(S[key])
-            s.config(command=lambda v, k=key: S.__setitem__(k, float(v)))
-            s.pack(fill="x")
+            s.pack(fill="x", pady=(2, 0))
             r = i // 2 + 1
         if with_curve:
             mode_frame = tk.Frame(f, bg=SURFACE)
-            mode_frame.grid(row=r, column=0, columnspan=2, sticky="ew", padx=6, pady=(10, 5))
+            mode_frame.grid(row=r, column=0, columnspan=2, sticky="ew", padx=6, pady=(12, 5))
             tk.Label(mode_frame, text="Modo da câmera:", fg=TEXT, bg=SURFACE,
-                     font=(FONT, 10, "bold")).pack(side="left")
+                     font=(FONT_BOLD, 10)).pack(side="left")
             self.direct_var = tk.BooleanVar(value=S["DIRECT_MODE"])
             rb_direct = tk.Radiobutton(mode_frame, text="Direto (lockpick)", variable=self.direct_var,
                                         value=True, command=lambda: self._set_direct_mode(True),
@@ -2023,6 +2029,12 @@ class App:
                                          bg=SURFACE, fg=TEXT, selectcolor=PANEL, activebackground=SURFACE,
                                          activeforeground=TEXT, font=(FONT, 10))
             rb_velocity.pack(side="left", padx=5)
+
+    def _on_slider(self, v, key, label):
+        val = float(v)
+        S[key] = val
+        label.config(text=f"{val:.2f}")
+
 
     def _set_direct_mode(self, enabled):
         S["DIRECT_MODE"] = enabled
