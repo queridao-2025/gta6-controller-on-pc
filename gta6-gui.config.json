@@ -1,7 +1,7 @@
 {
   "settings": {
     "SENS_X": 0.12,
-    "SENS_Y": 0.10,
+    "SENS_Y": 0.1,
     "DEADZONE_RS": 0.12,
     "ANTI_DZ": 0.12,
     "FRICTION": 0.65,

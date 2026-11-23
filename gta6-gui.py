@@ -1236,39 +1236,30 @@ class Engine:
             set_cursor(cx, cy)
 
     def feed_mouse_position(self, x, y, now):
-        """Converte posição do mouse relativa ao centro em valor do analógico direito.
+        """Acumula deltas do mouse e armazena como valor do analógico direito.
 
-        No GTA V real, o cursor fica preso ao centro da tela e a distância
-        do centro determina a velocidade da câmera. Quando o mouse para,
-        o cursor volta ao centro instantaneamente.
+        No GTA V real, o jogo lê o delta do mouse via Raw Input e converte
+        em velocidade da câmera. O analógico direito (RS) representa essa
+        velocidade, não uma posição absoluta.
 
-        A sensibilidade SENS_X/SENS_Y escala o quanto o mouse move o stick:
-        valor baixo = movimento mais sutil, valor alto = giro rápido.
+        Quando o mouse para de se mover, o valor decai rapidamente para zero
+        (sem efeito gelo prolongado).
         """
-        cx, cy = self._center
-        hw, hh = self._half
-        # Normaliza posição relativa ao centro para [-1, 1]
-        # y invertido: mouse para cima = stick para cima (câmera olha para cima)
-        rx = (x - cx) / max(1, hw)
-        ry = -(y - cy) / max(1, hh)
+        dx = x - self._last[0]
+        dy = y - self._last[1]
 
-        # Deadzone na posição bruta — filtra micro-movimentos antes da sensibilidade
-        dz_px = S["DEADZONE_RS"]  # mesmo valor da deadzone do stick
-        mag = math.hypot(rx, ry)
-        if mag < dz_px:
-            with self.mouse_lock:
-                self.rs_pos[0] = 0.0
-                self.rs_pos[1] = 0.0
-            return
-
-        # Aplica sensibilidade configurada (SENS_X/SENS_Y)
-        # Pequeno valor = movimento suave, grande valor = giro rápido
-        sx = rx * S["SENS_X"]
-        sy = ry * S["SENS_Y"]
+        # Acumula delta com sensibilidade
+        sx = dx * S["SENS_X"]
+        sy = dy * S["SENS_Y"]
 
         with self.mouse_lock:
-            self.rs_pos[0] = clamp(sx, -1.0, 1.0)
-            self.rs_pos[1] = clamp(sy, -1.0, 1.0)
+            self.rs_pos[0] = clamp(
+                self.rs_pos[0] + sx, -1.0, 1.0
+            )
+            self.rs_pos[1] = clamp(
+                self.rs_pos[1] - sy, -1.0, 1.0
+            )
+
 
 
     def on_mouse_click(self, x, y, button, is_down):
@@ -1379,42 +1370,52 @@ class Engine:
         #   1. Pos do mouse relativa ao centro (normalizada -1..1)
         #   2. Aplica sensibilidade SENS_X/SENS_Y
         #   3. Deadzone nativa do jogo (0.467): valores abaixo são IGNORADOS pelo jogo
-        #   4. Reescalona a faixa útil [0.467, 1.0] para [0, 1]
-        #   5. Aim acceleration: curva não-linear (mais lento perto do centro)
-        #   6. Anti-deadzone: empurra mínimo para acima da zona morta do jogo
+        # ----------------------------------------------------------------- Velocidade
+        # MODO VELOCIDADE (comportamento GTA V real):
+        # O jogo lê deltas do mouse via Raw Input e converte em velocidade da câmera.
+        # O analógico direito (RS) = velocidade da câmera.
+        # Quando o mouse para, o valor decai rapidamente para zero.
+        #
+        # Pipeline fiel ao GTA V:
+        #   1. Acumula deltas do mouse (rs_pos) com sensibilidade
+        #   2. Aplica aim acceleration (suaviza movimentos pequenos perto do centro)
+        #   3. Deadzone nativa do jogo (0.467): valores abaixo são IGNORADOS
+        #   4. Reescalona faixa útil [0.467, 1.0] para [0, 1] com smoothstep
+        #   5. Anti-deadzone: empurra mínimo acima da zona morta do jogo
+        #   6. Decaimento quando não há entrada (sem efeito gelo)
         with self.mouse_lock:
             vx, vy = self.rs_pos[0], self.rs_pos[1]
 
         mag = math.hypot(vx, vy)
+
+        # Sem entrada: decai rapidamente para zero (sem efeito gelo)
         if mag == 0.0:
             return 0.0, 0.0
 
+        # --- Aim acceleration: mais lento perto do centro ---
+        # Expoente > 1.0 suaviza pequenos movimentos perto do centro
+        curved_mag = mag ** 1.6
+
         # --- Deadzone nativa do GTA V (0.467) ---
         # O jogo ignora qualquer valor do stick abaixo de 0.467.
-        # Precisamos: nossa zona morta interna -> deadzone do jogo -> faixa útil.
         dz_game = 0.467   # deadzone nativa do GTA V (14/30)
         dz_ours = S["DEADZONE_RS"]  # nossa zona morta (0.12)
         useful_range = 1.0 - dz_game  # 0.533
 
-        if mag < dz_ours:
-            return 0.0, 0.0
-
         # Normaliza após nossa zona morta (0 -> 1)
-        normalized = (mag - dz_ours) / (1.0 - dz_ours)
-
-        # Aim acceleration: mais lento perto do centro, mais rápido nas bordas
-        # Expoente > 1.0 suaviza pequenos movimentos perto do centro
-        curved = normalized ** 1.6
+        if curved_mag < dz_ours:
+            return 0.0, 0.0
+        normalized = (curved_mag - dz_ours) / (1.0 - dz_ours)
 
         # Transição suave através da deadzone do jogo (0 -> dz_game)
         # Sem isso, o câmera "pula" quando sai da zona morta do GTA V
         transition_zone = 0.15
-        if curved < transition_zone:
-            t = curved / transition_zone
+        if normalized < transition_zone:
+            t = normalized / transition_zone
             t = t * t * (3.0 - 2.0 * t)  # smoothstep
             output_mag = t * dz_game
         else:
-            t = (curved - transition_zone) / (1.0 - transition_zone)
+            t = (normalized - transition_zone) / (1.0 - transition_zone)
             output_mag = dz_game + t * useful_range
 
         # Anti-deadzone: garante mínimo acima da deadzone do jogo (para Remote Play)
@@ -1439,10 +1440,15 @@ class Engine:
         # Clamp final
         output_mag = min(output_mag, 1.0)
 
-        # Reaplica direção
-        scale = output_mag / mag
+        # Reaplica direção (sem amplificação: output_mag <= 1, mag pode ser < output_mag)
+        scale = output_mag / mag if mag > 0 else 0.0
         vx *= scale
         vy *= scale
+
+        # Decaimento quando não há movimento contínuo (sem efeito gelo)
+        decay = min(0.85, S["FRICTION"])
+        vx *= decay
+        vy *= decay
 
         # Deadzone radial mínima final (evita drift residual)
         vx, vy = radial_deadzone(vx, vy, S["DEADZONE_RS"])
@@ -1459,6 +1465,7 @@ class Engine:
             vy = 0.0
 
         return vx, vy
+
 
 
     def supervise(self):
