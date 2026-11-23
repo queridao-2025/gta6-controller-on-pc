@@ -1399,7 +1399,8 @@ class Engine:
         if abs(vy) < SETTLE:
             vy = 0.0
 
-        return vx, vy
+    def supervise(self):
+        hwnd, title, exe = fg_window()
 
         own = title.startswith(APP_TITLE_LOWER)
         pats = [p.strip().lower() for p in S["game_patterns"].split(",") if p.strip()]
@@ -1440,6 +1441,7 @@ class Engine:
                     self.start_capture(rect)
             elif state["mouse_captured"]:
                 self.stop_capture()
+
 
     # ------------------------------------------------------------- loop 120Hz
     def step(self, now, dt):
