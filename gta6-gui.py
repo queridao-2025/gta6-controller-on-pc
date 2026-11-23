@@ -930,6 +930,7 @@ class Engine:
         self.ramp = {"steer": 0.0, "RT": 0.0, "LT": 0.0}
         self.wheel = {"x": 0.0, "y": 0.0, "active": False}
         self.rs_direct = [0.0, 0.0]            # posição do stick no modo direto
+        self.rs_pos = [0.0, 0.0]               # posição do stick no modo velocidade
         self._last_mouse_move_time = 0.0
         self.samples = deque(maxlen=128)
         self.mouse_lock = threading.Lock()
@@ -1190,7 +1191,7 @@ class Engine:
             return
         now = time.monotonic()
         cx, cy = self._center
-        
+
         # Filtro de recentro / warp: se o evento veio do set_cursor ao centro
         if self._pending:
             if abs(x - cx) <= 2 and abs(y - cy) <= 2:
@@ -1209,20 +1210,22 @@ class Engine:
         self._last = (x, y)
         self._last_mouse_move_time = now
 
-        if dx or dy:
-            if S["DIRECT_MODE"]:
-                # Modo direto: delta do mouse mapeia direto para a posição do stick.
-                # O mouse é recentrado para o centro, então cada evento é um deslocamento
-                # a partir do centro — ideal para lockpick (RS segura a posição).
-                with self.mouse_lock:
-                    self.rs_direct[0] = clamp(
-                        self.rs_direct[0] + dx * S["DIRECT_SENS_X"], -1.0, 1.0
-                    )
-                    self.rs_direct[1] = clamp(
-                        self.rs_direct[1] - dy * S["DIRECT_SENS_Y"], -1.0, 1.0
-                    )
-            else:
-                self.feed_mouse(dx, dy, now)
+        if S["DIRECT_MODE"]:
+            # Modo direto: delta do mouse mapeia para posição do stick.
+            # Ideal para lockpick (RS segura posição do mouse).
+            with self.mouse_lock:
+                self.rs_direct[0] = clamp(
+                    self.rs_direct[0] + dx * S["DIRECT_SENS_X"], -1.0, 1.0
+                )
+                self.rs_direct[1] = clamp(
+                    self.rs_direct[1] - dy * S["DIRECT_SENS_Y"], -1.0, 1.0
+                )
+        else:
+            # MODO VELOCIDADE (comportamento GTA V real):
+            # A posição do mouse relativa ao centro da tela = velocidade da câmera.
+            # Quando para de mover, o cursor volta ao centro e a câmera pára.
+            # NÃO acumulamos deltas — usamos posição absoluta relativa ao centro.
+            feed_mouse_position(self, x, y, now)
 
         # Se afastar mais de 30% do raio útil da janela, recentra
         hw, hh = self._half
@@ -1232,18 +1235,29 @@ class Engine:
             self._last = (cx, cy)
             set_cursor(cx, cy)
 
-    def feed_mouse(self, dx, dy, now):
-        if self.wheel["active"]:
-            r = max(20.0, float(S["WHEEL_RADIUS"]))
-            wx = self.wheel["x"] + dx
-            wy = self.wheel["y"] - dy          # mouse para cima = stick para cima
-            mag = math.hypot(wx, wy)
-            if mag > r:
-                wx, wy = wx * r / mag, wy * r / mag
-            self.wheel["x"], self.wheel["y"] = wx, wy
-        else:
+    def feed_mouse_position(self, x, y, now):
+        """Converte posição do mouse relativa ao centro em valor do analógico direito.
+
+        No GTA V real, o cursor fica preso ao centro da tela e a distância
+        do centro determina a velocidade da câmera. Quando o mouse para,
+        o cursor volta ao centro instantaneamente.
+        """
+        cx, cy = self._center
+        hw, hh = self._half
+        # Normaliza posição relativa ao centro para [-1, 1]
+        # y invertido: mouse para cima = stick para cima (câmera olha para cima)
+        rx = (x - cx) / max(1, hw)
+        ry = -(y - cy) / max(1, hh)
+        # Aplica zona morta interna do GTA V (0.467) — valores abaixo são ignorados
+        mag = math.hypot(rx, ry)
+        if mag < S["DEADZONE_RS"]:
             with self.mouse_lock:
-                self.samples.append((now, dx, dy))
+                self.rs_pos[0] = 0.0
+                self.rs_pos[1] = 0.0
+            return
+        with self.mouse_lock:
+            self.rs_pos[0] = clamp(rx, -1.0, 1.0)
+            self.rs_pos[1] = clamp(ry, -1.0, 1.0)
 
     def on_mouse_click(self, x, y, button, is_down):
         name = str(button).replace("Button.", "")
@@ -1276,42 +1290,14 @@ class Engine:
                 return
         self.apply_action(action, "w:" + name, True)
 
-    # -------------------------------------------------------------- câmera v2
-    # Novo motor: acumula deltas com janela temporal, aplica EMA com decay
-    # suave quando o mouse para, clamp circular, e curvas de resposta.
-    # A ideia central: o mouse produz IMPULSOS (deltas), que são convertidos
-    # em VELOCIDADE do stick via janela de acumulação. Quando os impulsos
-    # param, o stick retorna ao centro via friction exponencial — NÃO
-    # instantaneamente, que é o que causa a câmera pulsada/jittery.
-
-    def mouse_velocity(self, now):
-        """Soma os deltas dentro da janela temporal e retorna px/ms."""
-        window = MOUSE_WINDOW_MS / 1000.0
-        since = now - window
-        with self.mouse_lock:
-            while self.samples and self.samples[0][0] <= since:
-                self.samples.popleft()
-            if not self.samples:
-                return 0.0, 0.0
-            sx = sum(s[1] for s in self.samples)
-            sy = sum(s[2] for s in self.samples)
-            # Usar o tempo real da janela (do sample mais antigo ao agora)
-            # para cálculo de velocidade mais preciso
-            oldest = self.samples[0][0]
-            actual_window = max(now - oldest, 0.002)  # min 2ms para evitar div/0
-        return sx / (actual_window * 1000.0), sy / (actual_window * 1000.0)  # px/ms
+    # Novo motor baseado no comportamento real do GTA V / FiveM:
+    #   - O cursor fica preso ao centro da tela
+    #   - Distância do centro = velocidade da câmera (RS = velocidade)
+    #   - Deadzone nativa do jogo: 0.467 (14/30)
+    #   - Quando o mouse para, o cursor volta ao centro e a câmera pára
+    #   - Modo direto: posição do mouse = posição do stick (lockpick)
 
     def camera_vector(self, now, dt):
-        """Converte movimento do mouse em valor do analógico direito (RS).
-
-        Baseado no comportamento real do GTA V / FiveM:
-          - Deadzone nativa do jogo: 0.467 (14/30) — valores abaixo são ignorados
-          - Aim acceleration: resposta não-linear (mais lento perto do centro,
-            mais rápido nas bordas)
-          - Mouse camera (modo velocidade): 1:1 com sensibilidade, EMA suave,
-            retorno ao centro com fricção quando parado
-          - Modo direto: posição do mouse = posição do stick (ideal para lockpick)
-        """
         # ------------------------------------------------------------------ Direto
         if S["DIRECT_MODE"]:
             with self.mouse_lock:
@@ -1343,7 +1329,6 @@ class Engine:
             curved = normalized ** 1.4
 
             # Transição suave através da deadzone do jogo (0 → dz_game)
-            # Sem isso, o câmera "pula" quando sai da zona morta do GTA V
             transition_zone = 0.15
             if curved < transition_zone:
                 t = curved / transition_zone
@@ -1357,7 +1342,7 @@ class Engine:
             if output_mag > 0:
                 output_mag = anti_deadzone(output_mag)
 
-            # Curva de resposta configurável (progressive / aim / linear)
+            # Curva de resposta configurável
             curve = S["RESPONSE"]
             if curve == "progressive":
                 output_mag = output_mag ** 0.65
@@ -1374,51 +1359,25 @@ class Engine:
             return vx, vy
 
         # ----------------------------------------------------------------- Velocidade
-        vx_ms, vy_ms = self.mouse_velocity(now)
-        ysign = 1.0 if S["INVERT_Y"] else -1.0
+        # MODO VELOCIDADE (comportamento GTA V real):
+        # A posição do mouse relativa ao centro = velocidade da câmera.
+        # Quando o mouse para, o cursor volta ao centro instantaneamente.
+        with self.mouse_lock:
+            vx, vy = self.rs_pos[0], self.rs_pos[1]
 
-        # Converte px/ms para escala analógica (-1 → 1)
-        raw_x = clamp(vx_ms * S["SENS_X"] * 4.0, -1.0, 1.0)
-        raw_y = clamp(vy_ms * S["SENS_Y"] * 4.0 * ysign, -1.0, 1.0)
-
-        has_input = (raw_x != 0.0 or raw_y != 0.0)
-
-        if has_input:
-            self.idle = 0
-            # EMA com tau baseado no smoothing configurado
-            tau = S["SMOOTHING"] * S["SMOOTHING_MAX_TAU_MS"] / 1000.0
-            if tau > 0.001 and dt > 0.0:
-                alpha = 1.0 - math.exp(-dt / tau)
-                sx = self.smooth[0] + (raw_x - self.smooth[0]) * alpha
-                sy = self.smooth[1] + (raw_y - self.smooth[1]) * alpha
-            else:
-                sx, sy = raw_x, raw_y
-            self.smooth = [sx, sy]
-        else:
-            self.idle += 1
-            # Retorno ao centro com fricção quando o mouse para
-            friction = min(0.70, S["FRICTION"] * 0.8)
-            decay = (friction ** (dt * 120.0)) if dt > 0 else friction
-            sx = self.smooth[0] * decay
-            sy = self.smooth[1] * decay
-            if abs(sx) < SETTLE:
-                sx = 0.0
-            if abs(sy) < SETTLE:
-                sy = 0.0
-            self.smooth = [sx, sy]
+        # Aplica curva de resposta (aim acceleration) - mais lento perto do centro
+        curve = S["AIM_RESPONSE"] if self.aim_active() else S["RESPONSE"]
+        vx = apply_response(vx, curve)
+        vy = apply_response(vy, curve)
 
         # Multiplicadores de modo (precisão / mira)
         mult = 1.0
         if self.prec_src:
             mult *= S["PRECISION_MULT"]
-        aim = self.aim_active()
-        if aim:
+        if self.aim_active():
             mult *= S["AIM_MULT"]
-
-        # Curva de resposta (aim acceleration no modo mira)
-        curve = S["AIM_RESPONSE"] if aim else S["RESPONSE"]
-        vx = apply_response(sx * mult, curve)
-        vy = apply_response(sy * mult, curve)
+        vx *= mult
+        vy *= mult
 
         # Anti-deadzone: garante que qualquer movimento rompa a zona morta nativa
         # do GTA V no Xbox Remote Play
@@ -1442,10 +1401,6 @@ class Engine:
 
         return vx, vy
 
-
-    def supervise(self):
-        hwnd, title, exe = fg_window()
-        
         own = title.startswith(APP_TITLE_LOWER)
         pats = [p.strip().lower() for p in S["game_patterns"].split(",") if p.strip()]
         if own:
