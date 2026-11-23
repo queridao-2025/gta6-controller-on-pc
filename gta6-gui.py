@@ -1241,6 +1241,9 @@ class Engine:
         No GTA V real, o cursor fica preso ao centro da tela e a distância
         do centro determina a velocidade da câmera. Quando o mouse para,
         o cursor volta ao centro instantaneamente.
+
+        A sensibilidade SENS_X/SENS_Y escala o quanto o mouse move o stick:
+        valor baixo = movimento mais sutil, valor alto = giro rápido.
         """
         cx, cy = self._center
         hw, hh = self._half
@@ -1248,16 +1251,25 @@ class Engine:
         # y invertido: mouse para cima = stick para cima (câmera olha para cima)
         rx = (x - cx) / max(1, hw)
         ry = -(y - cy) / max(1, hh)
-        # Aplica zona morta interna do GTA V (0.467) — valores abaixo são ignorados
+
+        # Deadzone na posição bruta — filtra micro-movimentos antes da sensibilidade
+        dz_px = S["DEADZONE_RS"]  # mesmo valor da deadzone do stick
         mag = math.hypot(rx, ry)
-        if mag < S["DEADZONE_RS"]:
+        if mag < dz_px:
             with self.mouse_lock:
                 self.rs_pos[0] = 0.0
                 self.rs_pos[1] = 0.0
             return
+
+        # Aplica sensibilidade configurada (SENS_X/SENS_Y)
+        # Pequeno valor = movimento suave, grande valor = giro rápido
+        sx = rx * S["SENS_X"]
+        sy = ry * S["SENS_Y"]
+
         with self.mouse_lock:
-            self.rs_pos[0] = clamp(rx, -1.0, 1.0)
-            self.rs_pos[1] = clamp(ry, -1.0, 1.0)
+            self.rs_pos[0] = clamp(sx, -1.0, 1.0)
+            self.rs_pos[1] = clamp(sy, -1.0, 1.0)
+
 
     def on_mouse_click(self, x, y, button, is_down):
         name = str(button).replace("Button.", "")
