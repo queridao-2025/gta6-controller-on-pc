@@ -589,16 +589,19 @@ _RP_MOUSE_CAR = {
 _G6_FOOT = {
     "w": "LS_UP", "a": "LS_LEFT", "s": "LS_DOWN", "d": "LS_RIGHT",
     "space": "A", "z": "B", "b": "X", "r": "X", "x": "X", "f": "Y", "g": "Y",
-    "q": "RB", "c": "LB", "h": "R3",
+    "q": "LB",           # roda de armas (LB) — conforme jogargta.com
+    "c": "RB",           # cobertura
+    "h": "R3",
     "esc": "START", "o": "START", "p": "BACK", "i": "BACK",
-    "enter": "A", "backspace": "B",
+    "enter": "A", "backspace": "B",   # recarregar (B)
     "f1": "GUIDE", "f2": "BACK", "home": "GUIDE", "insert": "BACK",
     "1": "DPAD_UP", "2": "DPAD_DOWN", "3": "DPAD_LEFT", "4": "DPAD_RIGHT",
     "e": "DPAD_RIGHT", "t": "DPAD_RIGHT",
-    "up": "DPAD_UP", "down": "DPAD_DOWN", "left": "DPAD_LEFT", "right": "DPAD_RIGHT",
+    "up": "UP",          # telefone (UP) — conforme jogargta.com
+    "down": "DPAD_DOWN", "left": "DPAD_LEFT", "right": "DPAD_RIGHT",
     "page_up": "DPAD_UP", "page_down": "DPAD_DOWN",
     "shift": "L3", "shift_l": "L3", "shift_r": "L3", "rshift": "L3",
-    "capslock": "LT", "caps_lock": "LT",
+    "capslock": "LT", "caps_lock": "LT",  # mirar (LT)
     "alt_l": "@PRECISION", "ctrl_l": "@PRECISION", "ctrl_r": "RB",
     "v": "ACCEL_HALF",
     "tab": "@MODE", "f12": "@MODE",
@@ -606,7 +609,7 @@ _G6_FOOT = {
 _G6_CAR = _merge(_G6_FOOT, {
     "w": "ACCEL", "s": "BRAKE", "a": "LS_LEFT", "d": "LS_RIGHT",
     "up": "ACCEL", "down": "BRAKE", "left": "LS_LEFT", "right": "LS_RIGHT",
-    "space": "A",
+    "space": "RB",       # freio de mão (RB) — conforme jogargta.com
 })
 _G6_MOUSE = {
     "left": "RT", "right": "RS", "middle": "LT", "x1": "LB", "x2": "RB",
