@@ -1870,8 +1870,9 @@ class App:
 
     def _build_left(self, left):
         kb_body = self._section(left, "Teclado")
+        kb_body.pack(fill="both", expand=True, pady=(0, GAP))
         self.kb = tk.Canvas(kb_body, bg=SURFACE, highlightthickness=0, height=330)
-        self.kb.pack(fill="x")
+        self.kb.pack(fill="both", expand=True)
         self.kb.bind("<Configure>", self._on_kb_configure)
 
         bar = tk.Frame(kb_body, bg=SURFACE)
@@ -1889,10 +1890,13 @@ class App:
         self.info.pack(fill="x", pady=(8, 10))
 
         log_body = self._section(left, "Registro")
+        log_body.pack(fill="both", expand=True)
         self.log_text = tk.Text(log_body, height=6, bg=PANEL, fg=TEXT, bd=0, padx=10, pady=8,
                                 font=(MONO, 10), state="disabled", wrap="word",
                                 insertbackground=TEXT, highlightthickness=0)
         self.log_text.pack(fill="both", expand=True)
+
+
 
 
     def _on_kb_configure(self, event):
