@@ -1302,86 +1302,82 @@ class Engine:
         return sx / (actual_window * 1000.0), sy / (actual_window * 1000.0)  # px/ms
 
     def camera_vector(self, now, dt):
-        # --- MODO DIRETO: posição do mouse = posição do stick (ideal para lockpick)
-        # Baseado nas configurações reais do GTA V/FiveM:
-        #   profile_aimDeadzone = 14/30 = 0.467 (deadzone interna do jogo)
-        #   profile_controllerSensitivity = 5/10 = 0.5
-        #   profile_aimAcceleration = 7/10 = 0.7
+        """Converte movimento do mouse em valor do analógico direito (RS).
+
+        Baseado no comportamento real do GTA V / FiveM:
+          - Deadzone nativa do jogo: 0.467 (14/30) — valores abaixo são ignorados
+          - Aim acceleration: resposta não-linear (mais lento perto do centro,
+            mais rápido nas bordas)
+          - Mouse camera (modo velocidade): 1:1 com sensibilidade, EMA suave,
+            retorno ao centro com fricção quando parado
+          - Modo direto: posição do mouse = posição do stick (ideal para lockpick)
+        """
+        # ------------------------------------------------------------------ Direto
         if S["DIRECT_MODE"]:
             with self.mouse_lock:
                 vx, vy = self.rs_direct[0], self.rs_direct[1]
-            
-            # Decaimento exponencial suave (baseado em jogos AAA)
+
+            # Decaimento exponencial quando o mouse para (evita efeito gelo)
             idle_time = now - self._last_mouse_move_time
             if idle_time > 0.05:
-                tau = 0.200  # 200ms de meia-vida
+                tau = 0.200  # meia-vida de 200ms
                 decay = math.exp(-dt / tau)
                 vx *= decay
                 vy *= decay
                 with self.mouse_lock:
                     self.rs_direct[0] = vx
                     self.rs_direct[1] = vy
-            
-            # === COMPENSAÇÃO DA DEADZONE DO GTA V ===
-            # O GTA V tem deadzone = 0.467 (14/30). Qualquer valor abaixo disso
-            # é IGNORADO pelo jogo. Precisamos:
-            # 1. Nossa zona morta (DIRECT_DEADZONE) filtra micro-movimentos
-            # 2. Reescalonar o sinal para cobrir a faixa útil (0.467 → 1.0)
-            # 3. Anti-deadzone empurra o sinal mínimo para > 0.467
-            
-            dz_ours = S["DIRECT_DEADZONE"]        # nossa zona morta (0.04)
-            dz_game = 0.467                        # deadzone do GTA V (14/30)
-            useful_range = 1.0 - dz_game           # 0.533 faixa útil do stick
-            
+
+            dz_ours = S["DIRECT_DEADZONE"]   # nossa zona morta (0.04)
+            dz_game = 0.467                  # deadzone nativa do GTA V (14/30)
+            useful_range = 1.0 - dz_game     # 0.533 faixa útil
+
             mag = math.hypot(vx, vy)
             if mag < dz_ours:
                 return 0.0, 0.0
-            
+
             # Normaliza após nossa zona morta (0 → 1)
             normalized = (mag - dz_ours) / (1.0 - dz_ours)
-            
-            # Curva exponencial (exp=1.4) para aceleração natural
+
+            # Aim acceleration: curva exponencial (mais lento perto do centro)
             curved = normalized ** 1.4
-            
-            # Reescalona para a faixa útil do GTA V de forma SUAVE
-            # Em vez de jump direto para 0.467, interpola suavemente
-            transition_zone = 0.15  # zona de transição suave
+
+            # Transição suave através da deadzone do jogo (0 → dz_game)
+            # Sem isso, o câmera "pula" quando sai da zona morta do GTA V
+            transition_zone = 0.15
             if curved < transition_zone:
-                # Interpola suavemente de 0 até dz_game (smoothstep)
                 t = curved / transition_zone
-                t = t * t * (3.0 - 2.0 * t)
+                t = t * t * (3.0 - 2.0 * t)  # smoothstep
                 output_mag = t * dz_game
             else:
-                # Mapeia o resto para [dz_game, 1.0]
                 t = (curved - transition_zone) / (1.0 - transition_zone)
                 output_mag = dz_game + t * useful_range
-            
-            # Aplica anti-deadzone (empurra para > 0.12)
+
+            # Anti-deadzone: empurra mínimo para acima da deadzone do jogo
             if output_mag > 0:
                 output_mag = anti_deadzone(output_mag)
-            
-            # Curva de resposta configurável
+
+            # Curva de resposta configurável (progressive / aim / linear)
             curve = S["RESPONSE"]
             if curve == "progressive":
                 output_mag = output_mag ** 0.65
             elif curve == "aim":
                 output_mag = output_mag ** 0.45
-            
-            # Clamp final
+
             output_mag = min(output_mag, 1.0)
             scale = output_mag / mag
             vx *= scale
             vy *= scale
-            
+
             # Deadzone radial mínima final (evita drift)
             vx, vy = radial_deadzone(vx, vy, dz_ours)
             return vx, vy
 
-        # --- MODO VELOCIDADE (padrão original): mouse delta -> velocidade do stick
+        # ----------------------------------------------------------------- Velocidade
         vx_ms, vy_ms = self.mouse_velocity(now)
         ysign = 1.0 if S["INVERT_Y"] else -1.0
-        
-        # Converte px/ms para escala analógica com resposta direta e responsiva
+
+        # Converte px/ms para escala analógica (-1 → 1)
         raw_x = clamp(vx_ms * S["SENS_X"] * 4.0, -1.0, 1.0)
         raw_y = clamp(vy_ms * S["SENS_Y"] * 4.0 * ysign, -1.0, 1.0)
 
@@ -1389,8 +1385,7 @@ class Engine:
 
         if has_input:
             self.idle = 0
-            # Blend direto e responsivo para mira ágil e giro 360 imediato
-            # O tau modula o filtro: quanto menor smoothing, mais instantânea a resposta
+            # EMA com tau baseado no smoothing configurado
             tau = S["SMOOTHING"] * S["SMOOTHING_MAX_TAU_MS"] / 1000.0
             if tau > 0.001 and dt > 0.0:
                 alpha = 1.0 - math.exp(-dt / tau)
@@ -1401,7 +1396,7 @@ class Engine:
             self.smooth = [sx, sy]
         else:
             self.idle += 1
-            # Quando a mão para, o stick decai rapidamente ao centro (sem efeito gelo/arrasto)
+            # Retorno ao centro com fricção quando o mouse para
             friction = min(0.70, S["FRICTION"] * 0.8)
             decay = (friction ** (dt * 120.0)) if dt > 0 else friction
             sx = self.smooth[0] * decay
@@ -1412,7 +1407,7 @@ class Engine:
                 sy = 0.0
             self.smooth = [sx, sy]
 
-        # Multiplicadores de modo
+        # Multiplicadores de modo (precisão / mira)
         mult = 1.0
         if self.prec_src:
             mult *= S["PRECISION_MULT"]
@@ -1420,13 +1415,13 @@ class Engine:
         if aim:
             mult *= S["AIM_MULT"]
 
-        # Aplicação da curva de resposta
+        # Curva de resposta (aim acceleration no modo mira)
         curve = S["AIM_RESPONSE"] if aim else S["RESPONSE"]
         vx = apply_response(sx * mult, curve)
         vy = apply_response(sy * mult, curve)
 
-        # Anti-deadzone primeiro: garante que qualquer micro-movimento
-        # rompa a zona morta nativa do GTA no Xbox Remote Play
+        # Anti-deadzone: garante que qualquer movimento rompa a zona morta nativa
+        # do GTA V no Xbox Remote Play
         if vx != 0.0 or vy != 0.0:
             vx = anti_deadzone(vx)
             vy = anti_deadzone(vy)
@@ -1434,7 +1429,7 @@ class Engine:
         # Deadzone radial mínima interna para evitar drift residual
         vx, vy = radial_deadzone(vx, vy, S["DEADZONE_RS"])
 
-        # Clamp circular estrito: em 360 graus a magnitude nunca estoura 1.0
+        # Clamp circular: em 360° a magnitude nunca estoura 1.0
         mag = math.hypot(vx, vy)
         if mag > 1.0:
             vx /= mag
@@ -1446,6 +1441,7 @@ class Engine:
             vy = 0.0
 
         return vx, vy
+
 
     def supervise(self):
         hwnd, title, exe = fg_window()
