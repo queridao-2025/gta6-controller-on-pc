@@ -609,7 +609,7 @@ _G6_CAR = _merge(_G6_FOOT, {
     "space": "A",
 })
 _G6_MOUSE = {
-    "left": "RT", "right": "LT", "middle": "B", "x1": "A", "x2": "RB",
+    "left": "RT", "right": "RS", "middle": "LT", "x1": "LB", "x2": "RB",
     "wheel_up": "tap:LB", "wheel_down": "tap:RB",
 }
 
@@ -1421,16 +1421,8 @@ class Engine:
 
         return vx, vy
 
-    # ----------------------------------------------------------- supervisor
     def supervise(self):
         hwnd, title, exe = fg_window()
-        log(f"[debug] fg_window: hwnd={hwnd}, title='{title[:50]}...', exe='{exe}'")
-        pats = [p.strip().lower() for p in S["game_patterns"].split(",") if p.strip()]
-        exe_match = any(p in exe for p in pats)
-        title_match = any(p in title for p in pats)
-        log(f"[debug] exe='{exe}' match={exe_match}, title='{title[:60]}' match={title_match}")
-        log(f"[debug] smart_capture={S['smart_capture']}, emulation={state['emulation']}, menu_mode={state['menu_mode']}, menu_auto={state.get('menu_auto', False)}")
-        
         
         own = title.startswith(APP_TITLE_LOWER)
         pats = [p.strip().lower() for p in S["game_patterns"].split(",") if p.strip()]
