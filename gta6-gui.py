@@ -1847,7 +1847,8 @@ class App:
         left = tk.Frame(body, bg=BG)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         right = tk.Frame(body, bg=BG)
-        right.grid(row=0, column=1, sticky="ns")
+        right.grid(row=0, column=1, sticky="nsew")
+
 
         self._build_left(left)
         self._build_right(right)
