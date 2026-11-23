@@ -1654,12 +1654,19 @@ STATUS_WARN = AMBER
 STATUS_ERR = CORAL
 
 CAT_COLORS = {
+    "none": "#2c3142",      # tecla sem função
+    "move": "#22d3ee",      # movimento (teal)
+    "button": "#6366f1",    # botões (indigo)
+    "trigger": "#a855f7",   # gatilhos e ombros (violet)
+    "dpad": "#84cc16",      # D-pad (olive)
+    "macro": "#d97706",     # macros e alternadores (bronze)
     "foot": TEAL,
     "car": INDIGO,
     "menu": VIOLET,
     "system": OLIVE,
     "mouse": BRONZE,
 }
+
 
 CAT_NAMES = [
     ("foot", "A pé"),
