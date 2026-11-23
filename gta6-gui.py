@@ -1952,6 +1952,8 @@ class App:
     # ------------------------------------------------------------ coluna dir.
     def _build_right(self, right):
         pad_body = self._section(right, "Controle virtual")
+        pad_body.configure(height=280)
+        pad_body.pack_propagate(False)
         self._build_pad_canvas(pad_body)
         nb = ttk.Notebook(right)
         nb.pack(fill="both", expand=True, pady=(GAP, 0))
@@ -1959,6 +1961,7 @@ class App:
         self._tab_sliders(nb, "Câmera", CAMERA_SLIDERS, with_curve=True)
         self._tab_sliders(nb, "Roda e carro", MOVE_SLIDERS)
         self._tab_options(nb)
+
 
     def _tab_frame(self, nb, title):
         f = tk.Frame(nb, bg=SURFACE, padx=CARD_PAD, pady=CARD_PAD)
