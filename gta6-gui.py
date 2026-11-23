@@ -590,7 +590,7 @@ _G6_FOOT = {
     # Movimento (analógico esquerdo)
     "w": "LS_UP", "a": "LS_LEFT", "s": "LS_DOWN", "d": "LS_RIGHT",
     # Ações principais (conforme jogargta.com)
-    "space": "X",           # pular (X)
+    "space": "A",           # pular (A)
     "z": "B",               # granada/alternativo
     "b": "X", "r": "X", "x": "X",   # X (interação)
     "f": "Y", "g": "Y",     # Y (entrar/sair veículo)
