@@ -1849,10 +1849,10 @@ class App:
         right = tk.Frame(body, bg=BG)
         right.grid(row=0, column=1, sticky="nsew")
 
-
         self._build_left(left)
         self._build_right(right)
         self.update_ui()
+
 
 
 
