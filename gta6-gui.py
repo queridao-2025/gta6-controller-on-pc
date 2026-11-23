@@ -1896,6 +1896,10 @@ class App:
                                 insertbackground=TEXT, highlightthickness=0)
         self.log_text.pack(fill="both", expand=True)
 
+        # Desenha o teclado após a inicialização
+        self.root.after(100, lambda: self._redraw_kb(self.kb.winfo_width() or 1100))
+
+
 
 
 
