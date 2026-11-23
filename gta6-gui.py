@@ -6,8 +6,7 @@ Teclado + mouse  ->  controle Xbox 360 virtual (ViGEmBus).
 
 Requisitos:  pip install vgamepad pynput     (e o driver ViGEmBus instalado)
 
-Atalhos globais
-  Win esquerda / Scroll Lock ... liga/desliga a emulação
+  F8 ou Scroll Lock ... liga/desliga a emulação
   Pause ........................ mouse livre (usar menus/inventário do RP)
   F12 .......................... alterna a pé / no carro   (também no painel)
   Ctrl direito ................. liga/desliga o caminhar
@@ -394,7 +393,7 @@ S = copy.deepcopy(DEFAULTS)
 
 SETTLE = 0.003                       # abaixo disso o stick vai a zero
 MOUSE_WINDOW_MS = 32.0               # janela de acumulação (ms) — maior = mais suave
-EMU_TOGGLE_KEYS = ("cmd", "cmd_l", "cmd_r", "scroll_lock")
+EMU_TOGGLE_KEYS = ("cmd", "cmd_l", "cmd_r", "scroll_lock", "f8")
 MENU_TOGGLE_KEYS = ("pause",)
 TYPING_OPEN_KEYS = ("t", "/")
 TYPING_CLOSE_KEYS = ("enter", "esc")
@@ -1946,7 +1945,7 @@ class App:
         bf.pack(fill="x", pady=(12, 8))
         _btn(bf, "Restaurar teclas do perfil", self._reset_profile, bg=PANEL).pack(side="left")
         tk.Label(f, justify="left", fg=MUTED, bg=PANEL2, font=(FONT, 9),
-                 text="Win ou Scroll Lock: liga/desliga   |   Pause: mouse livre (menus)\n"
+                 text="F8 ou Scroll Lock: liga/desliga   |   Pause: mouse livre (menus)\n"
                       "F12: a pé/carro   |   Ctrl direito: caminhar   |   Enter/Esc: sai do chat"
                  ).pack(anchor="w")
 
@@ -2274,7 +2273,7 @@ def main():
     log(f"[perfil] {PROFILES[S['profile']]['label']} — {PROFILES[S['profile']]['note']}")
     log("[debug] App criado, iniciando mainloop...")
     
-    log("Win/Scroll Lock liga e desliga · Pause libera o mouse para menus")
+    log("F8 ou Scroll Lock liga e desliga · Pause libera o mouse para menus")
     try:
         root.mainloop()
     except KeyboardInterrupt:
