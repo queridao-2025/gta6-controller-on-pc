@@ -1,23 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-Xbox Virtual Controller — FiveM Roleplay / GTA V
-=================================================
+PAD RP — Xbox Controller Studio
+================================
 Teclado + mouse  ->  controle Xbox 360 virtual (ViGEmBus).
 
-Requisitos:  pip install vgamepad pynput     (e o driver ViGEmBus instalado)
+One-hand emulator for GTA V / FiveM / GTA VI via Xbox Remote Play.
+Designed for players with limited left-hand mobility.
 
-  F8 ou Scroll Lock ... liga/desliga a emulação
-  Pause ........................ mouse livre (usar menus/inventário do RP)
-  F12 .......................... alterna a pé / no carro   (também no painel)
+Requisitos:  pip install vgamepad pynput     (+ driver ViGEmBus)
+
+  F8 / Scroll Lock / LWin ...... liga/desliga a emulação
+  Pause ........................ mouse livre (menus / inventário)
+  F12 / Tab .................... alterna a pé / no carro
   Ctrl direito ................. liga/desliga o caminhar
-  T ou /  ...................... pausa o teclado enquanto digita no chat
+  T ou / ....................... pausa o teclado no chat
   Enter ou Esc ................. volta do chat
 
-Princípio do perfil "FiveM Roleplay": cada tecla do PC vira o botão Xbox que
-dispara o MESMO controle do GTA V. Teclas que os scripts de RP usam (F1-F10,
-números, K, L, U, J, X...) NÃO viram botão do controle, para não duplicar
-ações (ex.: Backspace virar "B" e dar soco). Elas continuam passando como
-teclado normal.
+Princípio: cada tecla do PC vira o botão Xbox que dispara o MESMO controle
+do jogo. Teclas usadas por scripts de RP (F1-F10, números, K, L, U...) NÃO
+viram botão do controle — continuam passando como teclado normal.
 """
 
 import atexit
@@ -48,8 +49,9 @@ try:
 except Exception:            # tratado em main()
     keyboard = mouse = None
 
-APP_TITLE = "Xbox Virtual Controller — FiveM RP"
+APP_TITLE = "PAD RP — Xbox Controller Studio"
 APP_TITLE_LOWER = APP_TITLE.lower()
+APP_SUBTITLE = "One-hand · GTA V / FiveM / GTA VI · Remote Play"
 
 try:
     _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -227,60 +229,68 @@ _ALL_OCR_IDS = [_OCR_NORMAL, _OCR_IBEAM, _OCR_WAIT, _OCR_CROSS,
                 _OCR_UP, _OCR_SIZENWSE, _OCR_SIZENESW, _OCR_SIZEWE,
                 _OCR_SIZENS, _OCR_SIZEALL, _OCR_NO, _OCR_HAND, _OCR_APPSTARTING]
 
-def hide_cursor():
+_cursor_hidden = False
+
+
+def hide_cursor(force=False):
     """Esconde o cursor GLOBALMENTE usando SetSystemCursor com cursor vazio.
-    Afeta TODAS as janelas (incluindo Remote Play)."""
+    Afeta TODAS as janelas (incluindo Remote Play). Evita spam de log."""
+    global _cursor_hidden
     if _user32 is None:
+        return
+    if _cursor_hidden and not force:
         return
     empty = _create_empty_cursor()
     if empty is None:
-        # Fallback: ShowCursor
         _user32.ShowCursor(False)
+        _cursor_hidden = True
         return
     for ocr_id in _ALL_OCR_IDS:
-        # Salva o original na primeira vez
         if ocr_id not in _SAVED_CURSORS:
             orig = _user32.LoadCursorW(None, ctypes.c_wchar_p(ocr_id))
             if orig:
                 _SAVED_CURSORS[ocr_id] = orig
-        # Substitui pelo cursor vazio
         _user32.SetSystemCursor(empty, ocr_id)
-    log("[cursor] escondido (SetSystemCursor)")
+    _cursor_hidden = True
+    if force or not _SAVED_CURSORS:
+        log("[cursor] escondido")
 
 
 def show_cursor():
     """Restaura os cursores padrão do Windows."""
+    global _cursor_hidden
     if _user32 is None:
         return
-    # Restaura cada cursor salvo
-    for ocr_id, orig in _SAVED_CURSORS.items():
+    if not _cursor_hidden and not _SAVED_CURSORS:
+        return
+    for ocr_id, orig in list(_SAVED_CURSORS.items()):
         _user32.SetSystemCursor(orig, ocr_id)
     _SAVED_CURSORS.clear()
-    # Garante que o contador ShowCursor está correto
     _user32.ShowCursor(True)
+    _cursor_hidden = False
     log("[cursor] restaurado")
 
 class CursorConfiner:
-    """Monitora e mantém o cursor confinado continuamente.
-    Reaplica ClipCursor se o Remote Play liberar o confinamento."""
-    
+    """Mantém o cursor confinado. Reaplica ClipCursor se o Remote Play soltar.
+    Re-hide de cursor é menos agressivo para evitar flicker e spam."""
+
     def __init__(self, engine_ref):
         self.engine = engine_ref
         self.running = False
         self.thread = None
-        self._check_interval = 0.016  # 16ms = ~60Hz
+        self._check_interval = 0.033  # ~30 Hz — suficiente e mais leve
+        self._cursor_rehide_timer = 0
 
     def start(self):
-        """Inicia o monitoramento contínuo"""
         if self.running:
             return
         self.running = True
+        self._cursor_rehide_timer = 0
         self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.thread.start()
-        log("[cursor] monitoramento de confinamento iniciado")
+        log("[cursor] monitoramento iniciado")
 
     def stop(self):
-        """Para o monitoramento"""
         if not self.running:
             return
         self.running = False
@@ -289,64 +299,38 @@ class CursorConfiner:
         log("[cursor] monitoramento parado")
 
     def _monitor_loop(self):
-        """Loop que verifica e reaplica o confinamento continuamente"""
         while self.running:
             try:
-                # Só monitora se o mouse deve estar capturado
-                if (state["mouse_captured"] and 
-                    state.get("capture_rect") and 
-                    state["emulation"] and 
-                    not self.engine.menu_active()):
-                    
-                    expected_rect = state["capture_rect"]
-                    
-                    # Verifica se o confinamento ainda está ativo
+                if (state["mouse_captured"] and state.get("capture_rect")
+                        and state["emulation"] and not self.engine.menu_active()):
+                    expected = state["capture_rect"]
                     current = wt.RECT()
+                    need_clip = False
                     if not _user32.GetClipCursor(ctypes.byref(current)):
-                        # Confinamento foi liberado - reaplica
-                        r = wt.RECT(
-                            expected_rect[0], expected_rect[1],
-                            expected_rect[2], expected_rect[3]
-                        )
-                        _user32.ClipCursor(ctypes.byref(r))
+                        need_clip = True
                     else:
-                        # Verifica se o retângulo está correto
-                        if (current.left != expected_rect[0] or
-                            current.top != expected_rect[1] or
-                            current.right != expected_rect[2] or
-                            current.bottom != expected_rect[3]):
-                            # Retângulo incorreto - reaplica
-                            r = wt.RECT(
-                                expected_rect[0], expected_rect[1],
-                                expected_rect[2], expected_rect[3]
-                            )
-                            _user32.ClipCursor(ctypes.byref(r))
-                    
-                    # Re-esconde cursor se o Remote Play o restaurou
-                    # Verifica a cada ~1s para não sobrecarregar
-                    self._cursor_rehide_timer = getattr(self, '_cursor_rehide_timer', 0) + 1
-                    if self._cursor_rehide_timer >= 60:  # ~1s a 60Hz
+                        # Tolerância de alguns pixels (Remote Play oscila)
+                        if (abs(current.left - expected[0]) > RECT_TOLERANCE
+                                or abs(current.top - expected[1]) > RECT_TOLERANCE
+                                or abs(current.right - expected[2]) > RECT_TOLERANCE
+                                or abs(current.bottom - expected[3]) > RECT_TOLERANCE):
+                            need_clip = True
+                    if need_clip:
+                        r = wt.RECT(expected[0], expected[1], expected[2], expected[3])
+                        _user32.ClipCursor(ctypes.byref(r))
+
+                    # Re-esconde cursor no máximo a cada ~2.5 s
+                    self._cursor_rehide_timer += 1
+                    if self._cursor_rehide_timer >= 75:
                         self._cursor_rehide_timer = 0
-                        # Verifica se o cursor normal voltou
                         ci = _CURSORINFO()
                         ci.cbSize = ctypes.sizeof(ci)
                         if _user32.GetCursorInfo(ctypes.byref(ci)):
-                            # Se o cursor não é o vazio, reaplica
-                            if ci.hCursor != _EMPTY_CURSOR:
-                                empty = _create_empty_cursor()
-                                if empty:
-                                    for ocr_id in _ALL_OCR_IDS:
-                                        if ocr_id not in _SAVED_CURSORS:
-                                            orig = _user32.LoadCursorW(None, ctypes.c_wchar_p(ocr_id))
-                                            if orig:
-                                                _SAVED_CURSORS[ocr_id] = orig
-                                        _user32.SetSystemCursor(empty, ocr_id)
-                
+                            if _EMPTY_CURSOR and ci.hCursor != _EMPTY_CURSOR:
+                                hide_cursor(force=True)
                 time.sleep(self._check_interval)
-                
-            except Exception as e:
-                # Silenciosamente ignora erros (evita spam no log)
-                time.sleep(0.1)
+            except Exception:
+                time.sleep(0.15)
 
 def cursor_showing():
     """True se o cursor do sistema está visível (menus com mouse)."""
@@ -382,10 +366,10 @@ DEFAULTS = {
     # veículo
     "HALF_THROTTLE": 0.25, "PEDAL_RAMP": 4.0, "STEER_RAMP": 4.0,
     # comportamento
-    "profile": "fivem_rp",
+    "profile": "gta6",
     "require_focus": True, "smart_capture": True,
     "typing_pause": True, "auto_mode_f": False, "auto_menu_cursor": False,
-    "game_patterns": "gta, grand theft, fivem, cfx",
+    "game_patterns": "gta, grand theft, fivem, cfx, remote play, xbox, xboxpcapp, xboxservice, gamingapp, xboxgame",
     "overrides": {},
 }
 SAVE_KEYS = [k for k in DEFAULTS if k != "overrides"]
@@ -397,11 +381,18 @@ EMU_TOGGLE_KEYS = ("cmd", "cmd_l", "cmd_r", "scroll_lock", "f8")
 MENU_TOGGLE_KEYS = ("pause",)
 TYPING_OPEN_KEYS = ("t", "/")
 TYPING_CLOSE_KEYS = ("enter", "esc")
+# Debounce de foco: exige N leituras iguais antes de mudar de estado
+FOCUS_DEBOUNCE = 3
+# Tolerância (px) para considerar o mesmo capture_rect (evita re-captura por 1px)
+RECT_TOLERANCE = 8
 # janelas que podem ter "GTA" no título (aba de navegador etc.) mas não são o jogo
-NOT_GAME_EXES = ("chrome.exe", "firefox.exe", "msedge.exe", "opera.exe", "brave.exe",
-                 "vivaldi.exe", "discord.exe", "code.exe", "explorer.exe", "notepad.exe",
-                 "notepad++.exe", "obs64.exe", "spotify.exe", "cmd.exe", "powershell.exe",
-                 "windowsterminal.exe", "python.exe", "pythonw.exe")
+NOT_GAME_EXES = (
+    "chrome.exe", "firefox.exe", "msedge.exe", "opera.exe", "brave.exe",
+    "vivaldi.exe", "discord.exe", "code.exe", "explorer.exe", "notepad.exe",
+    "notepad++.exe", "obs64.exe", "obs.exe", "spotify.exe", "cmd.exe",
+    "powershell.exe", "windowsterminal.exe", "python.exe", "pythonw.exe",
+    "steamwebhelper.exe", "slack.exe", "teams.exe",
+)
 
 state = {
     "emulation": True,
@@ -414,6 +405,8 @@ state = {
     "capture_rect": None,
     "game_focus": False,
     "fg_title": "",
+    "_focus_votes": 0,       # contador interno de debounce
+    "_focus_candidate": False,
 }
 pressed = set()              # teclas físicas pressionadas (para a GUI)
 log_lines = []
@@ -425,18 +418,20 @@ def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+LOG_PATH = os.path.join(_HERE, "emulator.log")
+
+
 def log(msg):
     with log_lock:
         timestamp = time.strftime("%H:%M:%S ")
         log_lines.append(timestamp + msg)
-        if len(log_lines) > 60:
+        if len(log_lines) > 80:
             log_lines.pop(0)
         log_version[0] += 1
-        # Salva no arquivo
         try:
-            with open("C:/GTA6Controller/emulator.log", "a", encoding="utf-8") as f:
+            with open(LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(timestamp + msg + "\n")
-        except:
+        except Exception:
             pass
 
 
@@ -606,7 +601,7 @@ _G6_FOOT = {
     "f1": "GUIDE", "f2": "BACK", "home": "GUIDE", "insert": "BACK",
     # Direcional
     "1": "DPAD_UP", "2": "DPAD_DOWN", "3": "DPAD_LEFT", "4": "DPAD_RIGHT",
-    "e": "DPAD_RIGHT", "t": "DPAD_RIGHT",
+    "e": "DPAD_RIGHT",
     "up": "DPAD_UP", "down": "DPAD_DOWN", "left": "DPAD_LEFT", "right": "DPAD_RIGHT",
     "page_up": "DPAD_UP", "page_down": "DPAD_DOWN",
     # Analógico esquerdo (caminhar/correr)
@@ -974,6 +969,8 @@ class Engine:
 
     # --------------------------------------------------------------- captura
     def start_capture(self, rect):
+        prev = state.get("capture_rect")
+        was = state["mouse_captured"]
         clip_cursor(rect)
         state["mouse_captured"] = True
         state["capture_rect"] = rect
@@ -983,11 +980,12 @@ class Engine:
         self._last = (cx, cy)
         self._pending = False
         set_cursor(cx, cy)
-        # Esconde o cursor (mantém funcional)
         hide_cursor()
-        # Inicia monitoramento contínuo de confinamento
         self.cursor_confiner.start()
-        log(f"[mouse] capturado {rect[2] - rect[0]}x{rect[3] - rect[1]}")
+        # Só loga se tamanho mudou de verdade ou primeira captura
+        w, h = rect[2] - rect[0], rect[3] - rect[1]
+        if (not was) or prev is None or abs((prev[2] - prev[0]) - w) > RECT_TOLERANCE or abs((prev[3] - prev[1]) - h) > RECT_TOLERANCE:
+            log(f"[mouse] capturado {w}x{h}")
 
     def stop_capture(self):
         if state["mouse_captured"]:
@@ -1471,23 +1469,35 @@ class Engine:
     def supervise(self):
         hwnd, title, exe = fg_window()
 
-        own = title.startswith(APP_TITLE_LOWER)
+        own = title.startswith(APP_TITLE_LOWER) or "pad rp" in title
         pats = [p.strip().lower() for p in S["game_patterns"].split(",") if p.strip()]
+        # Detecta Xbox / Remote Play por executável ou título
+        xbox_exes = ("xboxpcapp", "xboxapp", "gamingapp", "xboxgame", "remoteplay")
         if own:
-            focus = False
-        elif any(p in exe for p in pats):                  # processo do jogo
-            focus = True
-        else:                                              # título (ignora navegadores etc.)
-            focus = exe not in NOT_GAME_EXES and any(p in title for p in pats)
+            candidate = False
+        elif any(p in exe for p in pats) or any(x in exe for x in xbox_exes):
+            candidate = True
+        else:
+            candidate = exe not in NOT_GAME_EXES and any(p in title for p in pats)
+
         state["fg_title"] = title
-        if focus != state["game_focus"]:
-            state["game_focus"] = focus
-            log("[jogo] em foco" if focus else "[jogo] fora de foco")
+
+        # Debounce: só troca game_focus após FOCUS_DEBOUNCE leituras iguais
+        if candidate == state.get("_focus_candidate"):
+            state["_focus_votes"] = min(state.get("_focus_votes", 0) + 1, FOCUS_DEBOUNCE)
+        else:
+            state["_focus_candidate"] = candidate
+            state["_focus_votes"] = 1
+
+        if state["_focus_votes"] >= FOCUS_DEBOUNCE and candidate != state["game_focus"]:
+            state["game_focus"] = candidate
+            log("[jogo] em foco" if candidate else "[jogo] fora de foco")
+
+        focus = state["game_focus"]
         if not focus and state["typing"]:
             self.set_typing(False)
 
-        # auto_menu_cursor só funciona quando DIRECT_MODE está DESLIGADO
-        # (lockpick precisa que o RS segure a posição mesmo com cursor visível)
+        # auto_menu_cursor só com DIRECT_MODE desligado (lockpick precisa segurar RS)
         if S["auto_menu_cursor"] and not S["DIRECT_MODE"] and focus and state["emulation"] and not state["menu_mode"]:
             showing = cursor_showing()
             self._menu_votes = min(self._menu_votes + 1, 4) if showing else 0
@@ -1506,7 +1516,12 @@ class Engine:
             wanted = state["emulation"] and not self.menu_active() and focus
             if wanted:
                 rect = client_rect(hwnd)
-                if (not state["mouse_captured"]) or rect != state["capture_rect"]:
+                prev = state["capture_rect"]
+                # Só re-captura se o retângulo mudou de verdade (tolerância)
+                changed = True
+                if prev is not None:
+                    changed = any(abs(rect[i] - prev[i]) > RECT_TOLERANCE for i in range(4))
+                if (not state["mouse_captured"]) or changed:
                     self.start_capture(rect)
             elif state["mouse_captured"]:
                 self.stop_capture()
@@ -1617,54 +1632,54 @@ class Engine:
 
 
 # ======================================================================== GUI
-# Paleta moderna e profissional — tons escuros com acentos vivos
-BG = "#0f121c"            # fundo principal (quase preto)
-PANEL = "#161a27"          # painéis secundários
-PANEL2 = "#1f2433"         # superfície de entrada/ativos
-EDGE = "#2d3446"            # bordas sutis
-TEXT = "#e8ecf5"            # texto primário
-MUTED = "#94a3b8"           # texto secundário
-DIM = "#64748b"             # texto desabilitado/sutil
-AMBER = "#f59e0b"           # aviso / atenção
-TEAL = "#22d3ee"             # info / conectividade
-CORAL = "#fb7185"           # erro / perigo
-INDIGO = "#6366f1"          # ação primária
-VIOLET = "#a855f7"          # modo especial
-OLIVE = "#84cc16"           # sucesso / ativo
-BRONZE = "#d97706"          # modo direto / alerta
-SURFACE = "#1c2130"         # cards
-SURFACE_HOVER = "#252a3b"   # cards hover
-BORDER = "#334054"           # bordas dos cards
-ACCENT = "#22d3ee"           # destaque principal
-ACCENT_DIM = "#155e75"       # destaque escuro
-SUCCESS = "#34d399"          # confirmação
-WARNING = "#fbbf24"          # alerta
-ERROR = "#f87171"           # erro
-RING = "#6366f1"            # anel de foco
+# PAD RP — night-garage palette
+# ink #11141b · amber #f2b432 · teal #38b2a6 · coral #ef6f5e · paper #e6eaf2
+BG = "#11141b"              # ink — fundo principal
+PANEL = "#181c26"           # painéis
+PANEL2 = "#1e2430"          # superfícies ativas
+EDGE = "#2a3140"            # bordas
+TEXT = "#e6eaf2"            # paper — texto primário
+MUTED = "#8b95a8"           # texto secundário
+DIM = "#5c6578"             # desabilitado
+AMBER = "#f2b432"           # keycaps / atenção / pressed
+TEAL = "#38b2a6"            # live / conectado
+CORAL = "#ef6f5e"           # erro / desligado
+INDIGO = "#5b6ee1"          # ação primária
+VIOLET = "#9b6bff"          # modo especial
+OLIVE = "#6bcf6b"           # sucesso / a pé
+BRONZE = "#d4a017"          # carro / alerta quente
+SURFACE = "#1a1f2b"         # cards
+SURFACE_HOVER = "#232937"   # cards hover
+BORDER = "#2e3648"          # bordas dos cards
+ACCENT = TEAL               # destaque principal
+ACCENT_DIM = "#1a5c56"      # destaque escuro
+SUCCESS = OLIVE
+WARNING = AMBER
+ERROR = CORAL
+RING = TEAL
 GAP = 10
 CARD_PAD = 14
 FONT = "Segoe UI"
 FONT_BOLD = "Segoe UI Semibold"
 MONO = "Consolas"
 
-# Estados de conexão / status
-STATUS_ON = OLIVE
+STATUS_ON = TEAL
 STATUS_OFF = DIM
 STATUS_WARN = AMBER
 STATUS_ERR = CORAL
 
 CAT_COLORS = {
-    "none": "#2c3142",      # tecla sem função
-    "move": "#22d3ee",      # movimento (teal)
-    "button": "#6366f1",    # botões (indigo)
-    "trigger": "#a855f7",   # gatilhos e ombros (violet)
-    "dpad": "#84cc16",      # D-pad (olive)
-    "macro": "#d97706",     # macros e alternadores (bronze)
+    "none": "#252a36",      # tecla sem função
+    "move": TEAL,           # movimento
+    "button": INDIGO,       # botões de face
+    "trigger": VIOLET,      # gatilhos / ombros
+    "dpad": OLIVE,          # D-pad
+    "macro": AMBER,         # macros / alternadores
     "foot": TEAL,
-    "car": INDIGO,
+    "car": BRONZE,
     "menu": VIOLET,
     "system": OLIVE,
-    "mouse": BRONZE,
+    "mouse": AMBER,
 }
 
 
@@ -1805,43 +1820,53 @@ class App:
         h.pack(fill="x", padx=CARD_PAD, pady=(14, 10))
         h.grid_columnconfigure(1, weight=1)
 
-        # Título à esquerda
+        # Marca + live dot
         title = tk.Frame(h, bg=BG)
         title.grid(row=0, column=0, sticky="w")
-        tk.Label(title, text="GTA6 Controller", font=(FONT_BOLD, 20),
-                 fg=TEXT, bg=BG).pack(anchor="w")
-        tk.Label(title, text="Emulador de controle Xbox para GTA V / FiveM",
-                 font=(FONT, 10), fg=MUTED, bg=BG).pack(anchor="w", pady=(2, 0))
+        row1 = tk.Frame(title, bg=BG)
+        row1.pack(anchor="w")
+        self.live_dot = tk.Canvas(row1, width=12, height=12, bg=BG,
+                                  highlightthickness=0)
+        self.live_dot.pack(side="left", padx=(0, 8))
+        self._live_oval = self.live_dot.create_oval(2, 2, 10, 10, fill=DIM, outline="")
+        tk.Label(row1, text="PAD RP", font=(FONT_BOLD, 20),
+                 fg=TEXT, bg=BG).pack(side="left")
+        tk.Label(row1, text="  Controller Studio", font=(FONT, 14),
+                 fg=MUTED, bg=BG).pack(side="left", pady=(4, 0))
+        tk.Label(title, text=APP_SUBTITLE,
+                 font=(FONT, 10), fg=DIM, bg=BG).pack(anchor="w", pady=(2, 0))
 
-        # Status cards no centro
+        # Status chips
         chips = tk.Frame(h, bg=BG)
-        chips.grid(row=0, column=1, sticky="e", padx=(30, 0))
+        chips.grid(row=0, column=1, sticky="e", padx=(20, 0))
         self.chips = {}
+        self.chip_frames = {}
         for key in ("emu", "mode", "mouse", "game", "input"):
             card = tk.Frame(chips, bg=SURFACE, highlightbackground=BORDER,
                             highlightthickness=1, bd=0, padx=12, pady=6)
-            card.pack(side="left", padx=4)
+            card.pack(side="left", padx=3)
             lab = tk.Label(card, text="", font=(FONT_BOLD, 9), padx=0, pady=0,
                            fg=TEXT, bg=SURFACE)
             lab.pack()
             self.chips[key] = lab
+            self.chip_frames[key] = card
 
-        # Ações à direita
+        # Ações
         right = tk.Frame(h, bg=BG)
         right.grid(row=0, column=2, sticky="e")
         self.profile_var = tk.StringVar(value=PROFILES[S["profile"]]["label"])
-        cb = ttk.Combobox(right, textvariable=self.profile_var, state="readonly", width=26,
+        cb = ttk.Combobox(right, textvariable=self.profile_var, state="readonly", width=24,
                           values=[p["label"] for p in PROFILES.values()],
                           font=(FONT, 10))
-        cb.pack(side="left", padx=(0, 10))
+        cb.pack(side="left", padx=(0, 8))
         cb.bind("<<ComboboxSelected>>", self._on_profile)
         self.btn_emu = _btn(right, "Emulação", self._toggle_emu)
-        self.btn_emu.pack(side="left", padx=4)
+        self.btn_emu.pack(side="left", padx=3)
         self.btn_mode = _btn(right, "Modo", self._toggle_mode)
-        self.btn_mode.pack(side="left", padx=4)
+        self.btn_mode.pack(side="left", padx=3)
         self.btn_menu = _btn(right, "Mouse livre", self._toggle_menu)
-        self.btn_menu.pack(side="left", padx=4)
-        _btn(right, "Salvar", self._save, bg=INDIGO).pack(side="left", padx=(4, 0))
+        self.btn_menu.pack(side="left", padx=3)
+        _btn(right, "Salvar", self._save, bg=TEAL).pack(side="left", padx=(4, 0))
 
     # ---------------------------------------------------------------- body
     def _build_body(self):
@@ -2253,40 +2278,56 @@ class App:
         _btn(bf, "Cancelar", top.destroy, bg=PANEL).pack(side="left")
 
     # ------------------------------------------------------------ atualização
-    def _chip(self, key, text, bg):
-        self.chips[key].config(text=text, bg=bg)
+    def _chip(self, key, text, fg):
+        self.chips[key].config(text=text, fg=fg, bg=SURFACE)
+        if key in self.chip_frames:
+            # Borda sutil tingida pelo estado
+            border = fg if fg not in (MUTED, DIM, TEXT) else BORDER
+            try:
+                self.chip_frames[key].config(highlightbackground=border)
+            except Exception:
+                pass
 
     def update_ui(self):
         try:
             self._refresh()
-        except Exception as e:                      # a GUI nunca pode parar
+        except Exception as e:
             log(f"[erro] gui: {e}")
         self.root.after(50, self.update_ui)
 
     def _refresh(self):
         eng = self.eng
-        # --- chips
         emu = state["emulation"]
-        self._chip("emu", "Emulação ligada" if emu else "Emulação desligada", TEAL if emu else CORAL)
+        live = emu and state["game_focus"]
+
+        # Live indicator (teal quando ativo de verdade)
+        try:
+            self.live_dot.itemconfig(self._live_oval, fill=TEAL if live else (AMBER if emu else DIM))
+        except Exception:
+            pass
+
+        self._chip("emu", "LIVE" if live else ("Emulação ON" if emu else "Emulação OFF"),
+                   TEAL if live else (AMBER if emu else CORAL))
         self._chip("mode", "A pé" if state["mode"] == "foot" else "No carro",
                    OLIVE if state["mode"] == "foot" else BRONZE)
         if state["mouse_captured"]:
             r = state["capture_rect"]
-            self._chip("mouse", f"Mouse capturado {r[2] - r[0]}x{r[3] - r[1]}", INDIGO)
+            self._chip("mouse", f"Capturado {r[2] - r[0]}×{r[3] - r[1]}", TEAL)
         else:
             self._chip("mouse", "Mouse livre", MUTED)
-        self._chip("game", "Jogo em foco" if state["game_focus"] else "Jogo fora de foco",
+        self._chip("game", "Jogo em foco" if state["game_focus"] else "Fora de foco",
                    TEAL if state["game_focus"] else MUTED)
         if eng.menu_active():
-            self._chip("input", "Menu: mouse livre", AMBER)
+            self._chip("input", "Menu livre", AMBER)
         elif state["typing"]:
-            self._chip("input", "Digitando no chat", AMBER)
+            self._chip("input", "Chat", AMBER)
         elif state["walk"]:
             self._chip("input", "Caminhando", AMBER)
         else:
-            self._chip("input", "Entrada normal", MUTED)
-        self.btn_emu.config(text="Desligar emulação" if emu else "Ligar emulação")
-        self.btn_mode.config(text="Modo: " + MODE_LABELS[state["mode"]])
+            self._chip("input", "Normal", MUTED)
+
+        self.btn_emu.config(text="Desligar" if emu else "Ligar emulação")
+        self.btn_mode.config(text=MODE_LABELS[state["mode"]])
         self.btn_menu.config(text="Voltar ao jogo" if state["menu_mode"] else "Mouse livre")
 
         # --- mapa (muda com modo / perfil / edição)
