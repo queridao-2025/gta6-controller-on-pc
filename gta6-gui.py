@@ -1802,7 +1802,7 @@ class App:
                         highlightthickness=1, bd=0)
         card.pack(fill="x", pady=(0, GAP))
         tk.Label(card, text=text, font=(FONT, 11, "bold"), fg=TEXT, bg=SURFACE,
-                 padx=CARD_PAD, pady=(CARD_PAD, 6)).pack(anchor="w")
+                 padx=CARD_PAD, pady=CARD_PAD).pack(anchor="w")
         body = tk.Frame(card, bg=SURFACE)
         body.pack(fill="both", expand=True, padx=CARD_PAD, pady=(0, CARD_PAD))
         return body
