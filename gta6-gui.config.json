@@ -1,17 +1,21 @@
 {
   "settings": {
-    "SENS_X": 0.2,
-    "SENS_Y": 0.18,
-    "DEADZONE_RS": 0.08,
-    "ANTI_DZ": 0.08,
-    "FRICTION": 0.8,
-    "SMOOTHING": 0.2,
-    "SMOOTHING_MAX_TAU_MS": 60.0,
+    "SENS_X": 0.28,
+    "SENS_Y": 0.25,
+    "DEADZONE_RS": 0.04,
+    "ANTI_DZ": 0.12,
+    "FRICTION": 0.65,
+    "SMOOTHING": 0.15,
+    "SMOOTHING_MAX_TAU_MS": 40.0,
     "RESPONSE": "progressive",
     "AIM_RESPONSE": "aim",
     "PRECISION_MULT": 0.35,
-    "AIM_MULT": 0.45,
+    "AIM_MULT": 0.5,
     "INVERT_Y": false,
+    "DIRECT_MODE": true,
+    "DIRECT_SENS_X": 0.04,
+    "DIRECT_SENS_Y": 0.04,
+    "DIRECT_DEADZONE": 0.04,
     "WHEEL_RADIUS": 140.0,
     "WALK_SCALE": 0.5,
     "SPRINT_HZ": 9.0,
@@ -24,8 +28,8 @@
     "smart_capture": true,
     "typing_pause": true,
     "auto_mode_f": false,
-    "auto_menu_cursor": true,
-    "game_patterns": "gta, grand theft, fivem, cfx"
+    "auto_menu_cursor": false,
+    "game_patterns": "gta, grand theft, fivem, cfx, remote play, xbox, xboxpcapp, xboxservice, gamingapp, xboxgame"
   },
   "overrides": {}
 }

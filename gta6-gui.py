@@ -26,6 +26,7 @@ import copy
 import ctypes
 import ctypes.wintypes as wt
 import heapq
+import inspect
 import itertools
 import json
 import math
@@ -143,8 +144,9 @@ def client_rect(hwnd):
         return screen_rect()
     return rect
 
-
+# ====================================================================== Cursor
 def clip_cursor(rect):
+    """Confina o cursor à janela (usado pelo start_capture)"""
     if _user32 is None:
         return
     r = wt.RECT(rect[0], rect[1], rect[2], rect[3])
@@ -160,6 +162,192 @@ def set_cursor(x, y):
     if _user32 is not None:
         _user32.SetCursorPos(int(x), int(y))
 
+
+# Guarda o cursor original para restaurar depois
+_SAVED_CURSORS = {}  # id -> cursor original
+_EMPTY_CURSOR = None
+
+def _create_empty_cursor():
+    """Cria um cursor 1x1 totalmente transparente via CreateIconIndirect."""
+    global _EMPTY_CURSOR
+    if _EMPTY_CURSOR is not None:
+        return _EMPTY_CURSOR
+    if _user32 is None:
+        return None
+
+    class BITMAP(ctypes.Structure):
+        _fields_ = [("bmType", ctypes.c_long), ("bmWidth", ctypes.c_long),
+                    ("bmHeight", ctypes.c_long), ("bmWidthBytes", ctypes.c_long),
+                    ("bmPlanes", ctypes.c_uint16), ("bmBitsPixel", ctypes.c_uint16),
+                    ("bmBits", ctypes.c_void_p)]
+
+    class ICONINFO(ctypes.Structure):
+        _fields_ = [("fIcon", wt.BOOL), ("xHotspot", wt.DWORD),
+                    ("yHotspot", wt.DWORD), ("hbmMask", wt.HBITMAP),
+                    ("hbmColor", wt.HBITMAP)]
+
+    try:
+        _gdi32 = ctypes.windll.gdi32
+        # Cria bitmap AND mask 1x1 (todo transparente = 0xFFFFFFFF)
+        hbm_mask = _gdi32.CreateBitmap(1, 1, 1, 1, ctypes.byref(
+            (ctypes.c_uint32 * 1)(0xFFFFFFFF)))
+        if not hbm_mask:
+            return None
+
+        ii = ICONINFO()
+        ii.fIcon = False
+        ii.xHotspot = 0
+        ii.yHotspot = 0
+        ii.hbmMask = hbm_mask
+        ii.hbmColor = None  # sem cor = cursor monocromático
+
+        hcur = _user32.CreateIconIndirect(ctypes.byref(ii))
+        _gdi32.DeleteObject(hbm_mask)
+        _EMPTY_CURSOR = hcur
+        return hcur
+    except Exception:
+        return None
+
+
+# IDs dos cursores do sistema que precisamos substituir
+_OCR_NORMAL = 32512      # seta normal
+_OCR_IBEAM = 32513       # cursor de texto
+_OCR_WAIT = 32514        # ampulheta
+_OCR_CROSS = 32515       # cruz
+_OCR_UP = 32516          # seta vertical
+_OCR_SIZENWSE = 32642    # diagonal
+_OCR_SIZENESW = 32643    # diagonal
+_OCR_SIZEWE = 32644      # horizontal
+_OCR_SIZENS = 32645      # vertical
+_OCR_SIZEALL = 32646     # mover
+_OCR_NO = 32648          # proibido
+_OCR_HAND = 32649        # mão
+_OCR_APPSTARTING = 32650 # seta com ampulheta
+
+_ALL_OCR_IDS = [_OCR_NORMAL, _OCR_IBEAM, _OCR_WAIT, _OCR_CROSS,
+                _OCR_UP, _OCR_SIZENWSE, _OCR_SIZENESW, _OCR_SIZEWE,
+                _OCR_SIZENS, _OCR_SIZEALL, _OCR_NO, _OCR_HAND, _OCR_APPSTARTING]
+
+def hide_cursor():
+    """Esconde o cursor GLOBALMENTE usando SetSystemCursor com cursor vazio.
+    Afeta TODAS as janelas (incluindo Remote Play)."""
+    if _user32 is None:
+        return
+    empty = _create_empty_cursor()
+    if empty is None:
+        # Fallback: ShowCursor
+        _user32.ShowCursor(False)
+        return
+    for ocr_id in _ALL_OCR_IDS:
+        # Salva o original na primeira vez
+        if ocr_id not in _SAVED_CURSORS:
+            orig = _user32.LoadCursorW(None, ctypes.c_wchar_p(ocr_id))
+            if orig:
+                _SAVED_CURSORS[ocr_id] = orig
+        # Substitui pelo cursor vazio
+        _user32.SetSystemCursor(empty, ocr_id)
+    log("[cursor] escondido (SetSystemCursor)")
+
+
+def show_cursor():
+    """Restaura os cursores padrão do Windows."""
+    if _user32 is None:
+        return
+    # Restaura cada cursor salvo
+    for ocr_id, orig in _SAVED_CURSORS.items():
+        _user32.SetSystemCursor(orig, ocr_id)
+    _SAVED_CURSORS.clear()
+    # Garante que o contador ShowCursor está correto
+    _user32.ShowCursor(True)
+    log("[cursor] restaurado")
+
+class CursorConfiner:
+    """Monitora e mantém o cursor confinado continuamente.
+    Reaplica ClipCursor se o Remote Play liberar o confinamento."""
+    
+    def __init__(self, engine_ref):
+        self.engine = engine_ref
+        self.running = False
+        self.thread = None
+        self._check_interval = 0.016  # 16ms = ~60Hz
+
+    def start(self):
+        """Inicia o monitoramento contínuo"""
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.thread.start()
+        log("[cursor] monitoramento de confinamento iniciado")
+
+    def stop(self):
+        """Para o monitoramento"""
+        if not self.running:
+            return
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1.0)
+        log("[cursor] monitoramento parado")
+
+    def _monitor_loop(self):
+        """Loop que verifica e reaplica o confinamento continuamente"""
+        while self.running:
+            try:
+                # Só monitora se o mouse deve estar capturado
+                if (state["mouse_captured"] and 
+                    state.get("capture_rect") and 
+                    state["emulation"] and 
+                    not self.engine.menu_active()):
+                    
+                    expected_rect = state["capture_rect"]
+                    
+                    # Verifica se o confinamento ainda está ativo
+                    current = wt.RECT()
+                    if not _user32.GetClipCursor(ctypes.byref(current)):
+                        # Confinamento foi liberado - reaplica
+                        r = wt.RECT(
+                            expected_rect[0], expected_rect[1],
+                            expected_rect[2], expected_rect[3]
+                        )
+                        _user32.ClipCursor(ctypes.byref(r))
+                    else:
+                        # Verifica se o retângulo está correto
+                        if (current.left != expected_rect[0] or
+                            current.top != expected_rect[1] or
+                            current.right != expected_rect[2] or
+                            current.bottom != expected_rect[3]):
+                            # Retângulo incorreto - reaplica
+                            r = wt.RECT(
+                                expected_rect[0], expected_rect[1],
+                                expected_rect[2], expected_rect[3]
+                            )
+                            _user32.ClipCursor(ctypes.byref(r))
+                    
+                    # Re-esconde cursor se o Remote Play o restaurou
+                    # Verifica a cada ~1s para não sobrecarregar
+                    self._cursor_rehide_timer = getattr(self, '_cursor_rehide_timer', 0) + 1
+                    if self._cursor_rehide_timer >= 60:  # ~1s a 60Hz
+                        self._cursor_rehide_timer = 0
+                        # Verifica se o cursor normal voltou
+                        ci = _CURSORINFO()
+                        ci.cbSize = ctypes.sizeof(ci)
+                        if _user32.GetCursorInfo(ctypes.byref(ci)):
+                            # Se o cursor não é o vazio, reaplica
+                            if ci.hCursor != _EMPTY_CURSOR:
+                                empty = _create_empty_cursor()
+                                if empty:
+                                    for ocr_id in _ALL_OCR_IDS:
+                                        if ocr_id not in _SAVED_CURSORS:
+                                            orig = _user32.LoadCursorW(None, ctypes.c_wchar_p(ocr_id))
+                                            if orig:
+                                                _SAVED_CURSORS[ocr_id] = orig
+                                        _user32.SetSystemCursor(empty, ocr_id)
+                
+                time.sleep(self._check_interval)
+                
+            except Exception as e:
+                # Silenciosamente ignora erros (evita spam no log)
+                time.sleep(0.1)
 
 def cursor_showing():
     """True se o cursor do sistema está visível (menus com mouse)."""
@@ -177,12 +365,18 @@ atexit.register(unclip_cursor)
 # ================================================================ configuração
 DEFAULTS = {
     # câmera (mouse -> analógico direito)
-    "SENS_X": 0.20, "SENS_Y": 0.18,
-    "DEADZONE_RS": 0.08, "ANTI_DZ": 0.08,
-    "FRICTION": 0.80, "SMOOTHING": 0.20, "SMOOTHING_MAX_TAU_MS": 60.0,
+    "SENS_X": 0.22, "SENS_Y": 0.20,
+    "DEADZONE_RS": 0.06, "ANTI_DZ": 0.10,
+    "FRICTION": 0.85, "SMOOTHING": 0.25, "SMOOTHING_MAX_TAU_MS": 50.0,
     "RESPONSE": "progressive", "AIM_RESPONSE": "aim",
     "PRECISION_MULT": 0.35, "AIM_MULT": 0.45,
     "INVERT_Y": False,
+    # modo direto (posição do mouse = posição do stick, sem suavização/decai)
+    # Ideal para lockpick: o RS fica onde você deixa, sem voltar ao centro.
+    "DIRECT_MODE": True,
+    "DIRECT_SENS_X": 0.008,
+    "DIRECT_SENS_Y": 0.008,
+    "DIRECT_DEADZONE": 0.02,
     # roda (armas / rádio) e andar
     "WHEEL_RADIUS": 140.0, "WALK_SCALE": 0.50,
     "SPRINT_HZ": 9.0, "TAP_MS": 60.0,
@@ -198,8 +392,8 @@ DEFAULTS = {
 SAVE_KEYS = [k for k in DEFAULTS if k != "overrides"]
 S = copy.deepcopy(DEFAULTS)
 
-SETTLE = 0.002                       # abaixo disso o stick vai a zero
-MOUSE_WINDOW_MS = 24.0
+SETTLE = 0.003                       # abaixo disso o stick vai a zero
+MOUSE_WINDOW_MS = 32.0               # janela de acumulação (ms) — maior = mais suave
 EMU_TOGGLE_KEYS = ("cmd", "cmd_l", "cmd_r", "scroll_lock")
 MENU_TOGGLE_KEYS = ("pause",)
 TYPING_OPEN_KEYS = ("t", "/")
@@ -234,10 +428,17 @@ def clamp(v, lo, hi):
 
 def log(msg):
     with log_lock:
-        log_lines.append(time.strftime("%H:%M:%S ") + msg)
+        timestamp = time.strftime("%H:%M:%S ")
+        log_lines.append(timestamp + msg)
         if len(log_lines) > 60:
             log_lines.pop(0)
         log_version[0] += 1
+        # Salva no arquivo
+        try:
+            with open("C:/GTA6Controller/emulator.log", "a", encoding="utf-8") as f:
+                f.write(timestamp + msg + "\n")
+        except:
+            pass
 
 
 def load_config():
@@ -389,7 +590,7 @@ _RP_MOUSE_CAR = {
 _G6_FOOT = {
     "w": "LS_UP", "a": "LS_LEFT", "s": "LS_DOWN", "d": "LS_RIGHT",
     "space": "A", "z": "B", "b": "X", "r": "X", "x": "X", "f": "Y", "g": "Y",
-    "q": "RB", "c": "LB", "h": "R3", "n": "tap:RB",
+    "q": "RB", "c": "LB", "h": "R3",
     "esc": "START", "o": "START", "p": "BACK", "i": "BACK",
     "enter": "A", "backspace": "B",
     "f1": "GUIDE", "f2": "BACK", "home": "GUIDE", "insert": "BACK",
@@ -397,38 +598,32 @@ _G6_FOOT = {
     "e": "DPAD_RIGHT", "t": "DPAD_RIGHT",
     "up": "DPAD_UP", "down": "DPAD_DOWN", "left": "DPAD_LEFT", "right": "DPAD_RIGHT",
     "page_up": "DPAD_UP", "page_down": "DPAD_DOWN",
-    "shift_l": "L3", "shift_r": "L3", "v": "ACCEL_HALF",
-    "tab": "@MODE", "f12": "@MODE", "alt_l": "@PRECISION", "ctrl_l": "@PRECISION",
+    "shift": "L3", "shift_l": "L3", "shift_r": "L3", "rshift": "L3",
+    "capslock": "LT", "caps_lock": "LT",
+    "alt_l": "@PRECISION", "ctrl_l": "@PRECISION", "ctrl_r": "RB",
+    "v": "ACCEL_HALF",
+    "tab": "@MODE", "f12": "@MODE",
 }
 _G6_CAR = _merge(_G6_FOOT, {
     "w": "ACCEL", "s": "BRAKE", "a": "LS_LEFT", "d": "LS_RIGHT",
     "up": "ACCEL", "down": "BRAKE", "left": "LS_LEFT", "right": "LS_RIGHT",
+    "space": "A",
 })
 _G6_MOUSE = {
-    "left": "RT", "right": "LT", "middle": "R3", "x1": "RB", "x2": "A",
-    "wheel_up": "tap:LT", "wheel_down": "tap:RT",
+    "left": "RT", "right": "LT", "middle": "B", "x1": "A", "x2": "RB",
+    "wheel_up": "tap:LB", "wheel_down": "tap:RB",
 }
 
 PROFILES = {
     "fivem_rp": {
         "label": "FiveM Roleplay (GTA V)",
-        "note": "teclas de RP (F1-F10, números, K, L, U...) passam só como teclado",
-        "key": {"foot": _RP_FOOT, "car": _RP_CAR},
-        "mouse": {"foot": _RP_MOUSE_FOOT, "car": _RP_MOUSE_CAR},
-    },
-    "gta5": {
-        "label": "GTA V Story / Online",
-        "note": "igual ao RP, com Esc/P (pausa), M (menu) e G (granada)",
-        "key": {
-            "foot": _merge(_RP_FOOT, {"esc": "START", "p": "START", "m": "BACK",
-                                      "g": "@GRENADE", "z": "DPAD_DOWN", "up": "DPAD_UP"}),
-            "car": _merge(_RP_CAR, {"esc": "START", "p": "START", "m": "BACK"}),
-        },
-        "mouse": {"foot": _RP_MOUSE_FOOT, "car": _RP_MOUSE_CAR},
+        "note": "mapeamento oficial FiveM RP / GTA V",
+        "key": {"foot": _G6_FOOT, "car": _G6_CAR},
+        "mouse": {"foot": _G6_MOUSE, "car": _G6_MOUSE},
     },
     "gta6": {
-        "label": "GTA VI (legado)",
-        "note": "mapeamento antigo do projeto; roda = LT/RT, N = RB",
+        "label": "GTA VI (v2 oficial)",
+        "note": "mapeamento idêntico ao gta6_controller_v2",
         "key": {"foot": _G6_FOOT, "car": _G6_CAR},
         "mouse": {"foot": _G6_MOUSE, "car": _G6_MOUSE},
     },
@@ -643,6 +838,8 @@ class VirtualPad:
                 changed = True
             if changed:
                 gp.update()
+        # Força update inicial para o Remote Play detectar o controle virtual
+        gp.update()
 
 
 # ===================================================================== curvas
@@ -707,6 +904,8 @@ class Engine:
         self.prec_src = set()
         self.ramp = {"steer": 0.0, "RT": 0.0, "LT": 0.0}
         self.wheel = {"x": 0.0, "y": 0.0, "active": False}
+        self.rs_direct = [0.0, 0.0]            # posição do stick no modo direto
+        self._last_mouse_move_time = 0.0
         self.samples = deque(maxlen=128)
         self.mouse_lock = threading.Lock()
         self.smooth = [0.0, 0.0]
@@ -720,6 +919,7 @@ class Engine:
         self._kb_was = False
         self._ms_was = False
         self._menu_votes = 0
+        self.cursor_confiner = CursorConfiner(self)
 
     # ------------------------------------------------------------ condições
     def menu_active(self):
@@ -754,20 +954,27 @@ class Engine:
         cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
         self._center = (cx, cy)
         self._half = (max(1, (rect[2] - rect[0]) // 2), max(1, (rect[3] - rect[1]) // 2))
-        self._last = None
-        self._pending = True
-        self._pending_t = time.monotonic()
+        self._last = (cx, cy)
+        self._pending = False
         set_cursor(cx, cy)
+        # Esconde o cursor (mantém funcional)
+        hide_cursor()
+        # Inicia monitoramento contínuo de confinamento
+        self.cursor_confiner.start()
         log(f"[mouse] capturado {rect[2] - rect[0]}x{rect[3] - rect[1]}")
 
     def stop_capture(self):
         if state["mouse_captured"]:
+            # Mostra o cursor antes de liberar
+            show_cursor()
             unclip_cursor()
             state["mouse_captured"] = False
             state["capture_rect"] = None
             self._last = None
             self._pending = False
             self._reset_mouse()
+            # Para monitoramento de confinamento
+            self.cursor_confiner.stop()
             log("[mouse] liberado")
 
     def _reset_mouse(self):
@@ -925,6 +1132,13 @@ class Engine:
                 return
         if not self.keyboard_active():
             return
+        if k == "n" and self.pad.holders["LB"]:
+            self.tap("RB")
+            return
+        if k == "m":
+            S["DIRECT_MODE"] = not S["DIRECT_MODE"]
+            log("[câmera] modo direto: " + ("LIGADO (lockpick)" if S["DIRECT_MODE"] else "DESLIGADO (velocidade)"))
+            return
         action = get_action("key", k)
         src = "k:" + k
         with self.pad.lock:
@@ -947,25 +1161,50 @@ class Engine:
     # --------------------------------------------------------------- mouse
     def on_mouse_move(self, x, y):
         if not self.mouse_active():
+            self._last = (x, y)
             return
         now = time.monotonic()
         cx, cy = self._center
-        if self._pending:                      # esperando o evento do recentrar
-            if (x, y) == (cx, cy) or now - self._pending_t > 0.05:
+        
+        # Filtro de recentro / warp: se o evento veio do set_cursor ao centro
+        if self._pending:
+            if abs(x - cx) <= 2 and abs(y - cy) <= 2:
                 self._pending = False
-                self._last = (x, y)
-            return
+                self._last = (cx, cy)
+                return
+            elif now - self._pending_t > 0.04:
+                self._pending = False
+
         if self._last is None:
             self._last = (x, y)
             return
-        dx, dy = x - self._last[0], y - self._last[1]
+
+        dx = x - self._last[0]
+        dy = y - self._last[1]
         self._last = (x, y)
+        self._last_mouse_move_time = now
+
         if dx or dy:
-            self.feed_mouse(dx, dy, now)
+            if S["DIRECT_MODE"]:
+                # Modo direto: delta do mouse mapeia direto para a posição do stick.
+                # O mouse é recentrado para o centro, então cada evento é um deslocamento
+                # a partir do centro — ideal para lockpick (RS segura a posição).
+                with self.mouse_lock:
+                    self.rs_direct[0] = clamp(
+                        self.rs_direct[0] + dx * S["DIRECT_SENS_X"], -1.0, 1.0
+                    )
+                    self.rs_direct[1] = clamp(
+                        self.rs_direct[1] - dy * S["DIRECT_SENS_Y"], -1.0, 1.0
+                    )
+            else:
+                self.feed_mouse(dx, dy, now)
+
+        # Se afastar mais de 30% do raio útil da janela, recentra
         hw, hh = self._half
         if abs(x - cx) > hw * 0.30 or abs(y - cy) > hh * 0.30:
-            self._pending = True               # volta o cursor ao centro: sem "bater na borda"
+            self._pending = True
             self._pending_t = now
+            self._last = (cx, cy)
             set_cursor(cx, cy)
 
     def feed_mouse(self, dx, dy, now):
@@ -1000,6 +1239,9 @@ class Engine:
     def on_mouse_scroll(self, x, y, dx, dy):
         if not self.mouse_active() or dy == 0:
             return
+        if self.pad.holders["LB"]:
+            self.tap("LT" if dy > 0 else "RT")
+            return
         name = "wheel_up" if dy > 0 else "wheel_down"
         action = get_action("mouse", name)
         if action and not action.startswith("tap:") and action not in EVENT_ACTIONS:
@@ -1009,56 +1251,188 @@ class Engine:
                 return
         self.apply_action(action, "w:" + name, True)
 
-    # -------------------------------------------------------------- câmera
+    # -------------------------------------------------------------- câmera v2
+    # Novo motor: acumula deltas com janela temporal, aplica EMA com decay
+    # suave quando o mouse para, clamp circular, e curvas de resposta.
+    # A ideia central: o mouse produz IMPULSOS (deltas), que são convertidos
+    # em VELOCIDADE do stick via janela de acumulação. Quando os impulsos
+    # param, o stick retorna ao centro via friction exponencial — NÃO
+    # instantaneamente, que é o que causa a câmera pulsada/jittery.
+
     def mouse_velocity(self, now):
-        since = now - MOUSE_WINDOW_MS / 1000.0
+        """Soma os deltas dentro da janela temporal e retorna px/ms."""
+        window = MOUSE_WINDOW_MS / 1000.0
+        since = now - window
         with self.mouse_lock:
             while self.samples and self.samples[0][0] <= since:
                 self.samples.popleft()
+            if not self.samples:
+                return 0.0, 0.0
             sx = sum(s[1] for s in self.samples)
             sy = sum(s[2] for s in self.samples)
-        return sx / MOUSE_WINDOW_MS, sy / MOUSE_WINDOW_MS     # px/ms
+            # Usar o tempo real da janela (do sample mais antigo ao agora)
+            # para cálculo de velocidade mais preciso
+            oldest = self.samples[0][0]
+            actual_window = max(now - oldest, 0.002)  # min 2ms para evitar div/0
+        return sx / (actual_window * 1000.0), sy / (actual_window * 1000.0)  # px/ms
 
     def camera_vector(self, now, dt):
-        vx_ms, vy_ms = self.mouse_velocity(now)
-        ysign = 1.0 if S["INVERT_Y"] else -1.0                # dy da tela cresce p/ baixo
-        raw_x = clamp(vx_ms * S["SENS_X"] * 5.0, -1.0, 1.0)
-        raw_y = clamp(vy_ms * S["SENS_Y"] * 5.0 * ysign, -1.0, 1.0)
+        # --- MODO DIRETO: posição do mouse = posição do stick (ideal para lockpick)
+        # Baseado nas configurações reais do GTA V/FiveM:
+        #   profile_aimDeadzone = 14/30 = 0.467 (deadzone interna do jogo)
+        #   profile_controllerSensitivity = 5/10 = 0.5
+        #   profile_aimAcceleration = 7/10 = 0.7
+        if S["DIRECT_MODE"]:
+            with self.mouse_lock:
+                vx, vy = self.rs_direct[0], self.rs_direct[1]
+            
+            # Decaimento exponencial suave (baseado em jogos AAA)
+            idle_time = now - self._last_mouse_move_time
+            if idle_time > 0.05:
+                tau = 0.200  # 200ms de meia-vida
+                decay = math.exp(-dt / tau)
+                vx *= decay
+                vy *= decay
+                with self.mouse_lock:
+                    self.rs_direct[0] = vx
+                    self.rs_direct[1] = vy
+            
+            # === COMPENSAÇÃO DA DEADZONE DO GTA V ===
+            # O GTA V tem deadzone = 0.467 (14/30). Qualquer valor abaixo disso
+            # é IGNORADO pelo jogo. Precisamos:
+            # 1. Nossa zona morta (DIRECT_DEADZONE) filtra micro-movimentos
+            # 2. Reescalonar o sinal para cobrir a faixa útil (0.467 → 1.0)
+            # 3. Anti-deadzone empurra o sinal mínimo para > 0.467
+            
+            dz_ours = S["DIRECT_DEADZONE"]        # nossa zona morta (0.04)
+            dz_game = 0.467                        # deadzone do GTA V (14/30)
+            useful_range = 1.0 - dz_game           # 0.533 faixa útil do stick
+            
+            mag = math.hypot(vx, vy)
+            if mag < dz_ours:
+                return 0.0, 0.0
+            
+            # Normaliza após nossa zona morta (0 → 1)
+            normalized = (mag - dz_ours) / (1.0 - dz_ours)
+            
+            # Curva exponencial (exp=1.4) para aceleração natural
+            curved = normalized ** 1.4
+            
+            # Reescalona para a faixa útil do GTA V de forma SUAVE
+            # Em vez de jump direto para 0.467, interpola suavemente
+            transition_zone = 0.15  # zona de transição suave
+            if curved < transition_zone:
+                # Interpola suavemente de 0 até dz_game (smoothstep)
+                t = curved / transition_zone
+                t = t * t * (3.0 - 2.0 * t)
+                output_mag = t * dz_game
+            else:
+                # Mapeia o resto para [dz_game, 1.0]
+                t = (curved - transition_zone) / (1.0 - transition_zone)
+                output_mag = dz_game + t * useful_range
+            
+            # Aplica anti-deadzone (empurra para > 0.12)
+            if output_mag > 0:
+                output_mag = anti_deadzone(output_mag)
+            
+            # Curva de resposta configurável
+            curve = S["RESPONSE"]
+            if curve == "progressive":
+                output_mag = output_mag ** 0.65
+            elif curve == "aim":
+                output_mag = output_mag ** 0.45
+            
+            # Clamp final
+            output_mag = min(output_mag, 1.0)
+            scale = output_mag / mag
+            vx *= scale
+            vy *= scale
+            
+            # Deadzone radial mínima final (evita drift)
+            vx, vy = radial_deadzone(vx, vy, dz_ours)
+            return vx, vy
 
-        self.idle = self.idle + 1 if (raw_x == 0.0 and raw_y == 0.0) else 0
-        if self.idle >= 2:
-            self.smooth = [0.0, 0.0]
-            sx = sy = 0.0
-        else:
-            raw_x *= S["FRICTION"]
-            raw_y *= S["FRICTION"]
+        # --- MODO VELOCIDADE (padrão original): mouse delta -> velocidade do stick
+        vx_ms, vy_ms = self.mouse_velocity(now)
+        ysign = 1.0 if S["INVERT_Y"] else -1.0
+        
+        # Converte px/ms para escala analógica com resposta direta e responsiva
+        raw_x = clamp(vx_ms * S["SENS_X"] * 4.0, -1.0, 1.0)
+        raw_y = clamp(vy_ms * S["SENS_Y"] * 4.0 * ysign, -1.0, 1.0)
+
+        has_input = (raw_x != 0.0 or raw_y != 0.0)
+
+        if has_input:
+            self.idle = 0
+            # Blend direto e responsivo para mira ágil e giro 360 imediato
+            # O tau modula o filtro: quanto menor smoothing, mais instantânea a resposta
             tau = S["SMOOTHING"] * S["SMOOTHING_MAX_TAU_MS"] / 1000.0
-            alpha = 1.0 - math.exp(-dt / tau) if (tau > 0.0 and dt > 0.0) else 1.0
-            sx = self.smooth[0] + (raw_x - self.smooth[0]) * alpha
-            sy = self.smooth[1] + (raw_y - self.smooth[1]) * alpha
+            if tau > 0.001 and dt > 0.0:
+                alpha = 1.0 - math.exp(-dt / tau)
+                sx = self.smooth[0] + (raw_x - self.smooth[0]) * alpha
+                sy = self.smooth[1] + (raw_y - self.smooth[1]) * alpha
+            else:
+                sx, sy = raw_x, raw_y
+            self.smooth = [sx, sy]
+        else:
+            self.idle += 1
+            # Quando a mão para, o stick decai rapidamente ao centro (sem efeito gelo/arrasto)
+            friction = min(0.70, S["FRICTION"] * 0.8)
+            decay = (friction ** (dt * 120.0)) if dt > 0 else friction
+            sx = self.smooth[0] * decay
+            sy = self.smooth[1] * decay
+            if abs(sx) < SETTLE:
+                sx = 0.0
+            if abs(sy) < SETTLE:
+                sy = 0.0
             self.smooth = [sx, sy]
 
+        # Multiplicadores de modo
         mult = 1.0
         if self.prec_src:
             mult *= S["PRECISION_MULT"]
         aim = self.aim_active()
         if aim:
             mult *= S["AIM_MULT"]
-        curve = S["AIM_RESPONSE"] if aim else None
+
+        # Aplicação da curva de resposta
+        curve = S["AIM_RESPONSE"] if aim else S["RESPONSE"]
         vx = apply_response(sx * mult, curve)
         vy = apply_response(sy * mult, curve)
+
+        # Anti-deadzone primeiro: garante que qualquer micro-movimento
+        # rompa a zona morta nativa do GTA no Xbox Remote Play
+        if vx != 0.0 or vy != 0.0:
+            vx = anti_deadzone(vx)
+            vy = anti_deadzone(vy)
+
+        # Deadzone radial mínima interna para evitar drift residual
         vx, vy = radial_deadzone(vx, vy, S["DEADZONE_RS"])
-        if vx or vy:
-            vx, vy = anti_deadzone(vx), anti_deadzone(vy)
+
+        # Clamp circular estrito: em 360 graus a magnitude nunca estoura 1.0
+        mag = math.hypot(vx, vy)
+        if mag > 1.0:
+            vx /= mag
+            vy /= mag
+
         if abs(vx) < SETTLE:
             vx = 0.0
         if abs(vy) < SETTLE:
             vy = 0.0
+
         return vx, vy
 
     # ----------------------------------------------------------- supervisor
     def supervise(self):
         hwnd, title, exe = fg_window()
+        log(f"[debug] fg_window: hwnd={hwnd}, title='{title[:50]}...', exe='{exe}'")
+        pats = [p.strip().lower() for p in S["game_patterns"].split(",") if p.strip()]
+        exe_match = any(p in exe for p in pats)
+        title_match = any(p in title for p in pats)
+        log(f"[debug] exe='{exe}' match={exe_match}, title='{title[:60]}' match={title_match}")
+        log(f"[debug] smart_capture={S['smart_capture']}, emulation={state['emulation']}, menu_mode={state['menu_mode']}, menu_auto={state.get('menu_auto', False)}")
+        
+        
         own = title.startswith(APP_TITLE_LOWER)
         pats = [p.strip().lower() for p in S["game_patterns"].split(",") if p.strip()]
         if own:
@@ -1074,7 +1448,9 @@ class Engine:
         if not focus and state["typing"]:
             self.set_typing(False)
 
-        if S["auto_menu_cursor"] and focus and state["emulation"] and not state["menu_mode"]:
+        # auto_menu_cursor só funciona quando DIRECT_MODE está DESLIGADO
+        # (lockpick precisa que o RS segure a posição mesmo com cursor visível)
+        if S["auto_menu_cursor"] and not S["DIRECT_MODE"] and focus and state["emulation"] and not state["menu_mode"]:
             showing = cursor_showing()
             self._menu_votes = min(self._menu_votes + 1, 4) if showing else 0
             auto = self._menu_votes >= 2
@@ -1266,6 +1642,10 @@ CAMERA_SLIDERS = [
     ("SMOOTHING_MAX_TAU_MS", "Suavização máxima (ms)", 0.0, 200.0, 5.0),
     ("PRECISION_MULT", "Mouse lento (Alt)", 0.05, 1.0, 0.05),
     ("AIM_MULT", "Mouse ao mirar", 0.10, 1.0, 0.05),
+    # Modo direto (lockpick)
+    ("DIRECT_SENS_X", "Direto: sensibilidade X", 0.001, 0.020, 0.001),
+    ("DIRECT_SENS_Y", "Direto: sensibilidade Y", 0.001, 0.020, 0.001),
+    ("DIRECT_DEADZONE", "Direto: zona morta", 0.0, 0.10, 0.01),
 ]
 MOVE_SLIDERS = [
     ("WHEEL_RADIUS", "Alcance da roda de armas (px)", 40.0, 300.0, 5.0),
@@ -1514,22 +1894,30 @@ class App:
             s.pack(fill="x")
             r = i // 2 + 1
         if with_curve:
+            # Botão de modo de câmera
+            mode_frame = tk.Frame(f, bg=PANEL2)
+            mode_frame.grid(row=r, column=0, columnspan=2, sticky="ew", padx=6, pady=(10, 5))
+            tk.Label(mode_frame, text="Modo da câmera:", fg=TEXT, bg=PANEL2,
+                     font=(FONT, 10, "bold")).pack(side="left")
+            self.direct_var = tk.BooleanVar(value=S["DIRECT_MODE"])
+            rb_direct = tk.Radiobutton(mode_frame, text="Direto (lockpick)", variable=self.direct_var,
+                                        value=True, command=lambda: self._set_direct_mode(True),
+                                        bg=PANEL2, fg=TEXT, selectcolor=PANEL, activebackground=PANEL2,
+                                        activeforeground=TEXT, font=(FONT, 10))
+            rb_direct.pack(side="left", padx=(10, 5))
+            rb_velocity = tk.Radiobutton(mode_frame, text="Velocidade (câmera)", variable=self.direct_var,
+                                         value=False, command=lambda: self._set_direct_mode(False),
+                                         bg=PANEL2, fg=TEXT, selectcolor=PANEL, activebackground=PANEL2,
+                                         activeforeground=TEXT, font=(FONT, 10))
+            rb_velocity.pack(side="left", padx=5)
+            
             cf = tk.Frame(f, bg=PANEL2)
-            cf.grid(row=r, column=0, columnspan=2, sticky="ew", padx=6, pady=(10, 0))
-            tk.Label(cf, text="Curva de resposta", fg=TEXT, bg=PANEL2,
-                     font=(FONT, 9)).pack(side="left")
-            self.curve_var = tk.StringVar(value=CURVE_LABELS.get(S["RESPONSE"], "Progressiva"))
-            cb = ttk.Combobox(cf, textvariable=self.curve_var, state="readonly", width=18,
-                              values=[CURVE_LABELS[c] for c in CURVES], font=(FONT, 10))
-            cb.pack(side="left", padx=10)
-            cb.bind("<<ComboboxSelected>>", self._on_curve)
-            self.inv_var = tk.BooleanVar(value=S["INVERT_Y"])
-            tk.Checkbutton(f, text="Inverter eixo vertical da câmera", variable=self.inv_var,
-                           command=lambda: S.__setitem__("INVERT_Y", bool(self.inv_var.get())),
-                           bg=PANEL2, fg=TEXT, selectcolor=PANEL, activebackground=PANEL2,
-                           activeforeground=TEXT, font=(FONT, 10)).grid(
-                row=r + 1, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 0))
+            cf.grid(row=r+1, column=0, columnspan=2, sticky="ew", padx=6, pady=(10, 0))
 
+
+    def _set_direct_mode(self, enabled):
+        S["DIRECT_MODE"] = enabled
+        log(f"[câmera] modo {'direto (lockpick)' if enabled else 'velocidade (câmera)'}")
     def _tab_options(self, nb):
         f = self._tab_frame(nb, "Opções")
         self.opt_vars = {}
@@ -1856,13 +2244,20 @@ def main():
     }
     pad = VirtualPad(gamepad, codes)
     eng = Engine(pad)
+    log("[debug] VirtualPad criado")
+    log("[debug] Engine criado")
+    log("[debug] Iniciando output_loop...")
+    
     threading.Thread(target=eng.output_loop, daemon=True).start()
+    log("[debug] output_loop iniciado")
+    
 
     def guard(fn):
-        def wrapper(*a):
+        n = len(inspect.signature(fn).parameters)
+        def wrapper(*args, **kwargs):
             try:
-                return fn(*a)
-            except Exception as e:           # exceção no callback mata o listener do pynput
+                return fn(*args[:n])
+            except Exception as e:
                 log(f"[erro] {fn.__name__}: {e}")
         return wrapper
 
@@ -1877,6 +2272,8 @@ def main():
     app.listeners = [kb_l, ms_l]
     root.protocol("WM_DELETE_WINDOW", app.on_close)
     log(f"[perfil] {PROFILES[S['profile']]['label']} — {PROFILES[S['profile']]['note']}")
+    log("[debug] App criado, iniciando mainloop...")
+    
     log("Win/Scroll Lock liga e desliga · Pause libera o mouse para menus")
     try:
         root.mainloop()

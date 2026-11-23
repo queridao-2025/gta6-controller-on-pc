@@ -30,3 +30,4 @@ Desktop.ini
 *.log
 *.tmp
 omp --resume *.txt
+gta6-gui.config.json
