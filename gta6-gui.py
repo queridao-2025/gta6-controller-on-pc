@@ -587,29 +587,53 @@ _RP_MOUSE_CAR = {
 
 # ---- GTA VI (legado): mapeamento original, com os conflitos corrigidos ------
 _G6_FOOT = {
+    # Movimento (analógico esquerdo)
     "w": "LS_UP", "a": "LS_LEFT", "s": "LS_DOWN", "d": "LS_RIGHT",
-    "space": "A", "z": "B", "b": "X", "r": "X", "x": "X", "f": "Y", "g": "Y",
-    "q": "LB",           # roda de armas (LB) — conforme jogargta.com
-    "c": "RB",           # cobertura
-    "h": "R3",
-    "esc": "START", "o": "START", "p": "BACK", "i": "BACK",
-    "enter": "A", "backspace": "B",   # recarregar (B)
+    # Ações principais (conforme jogargta.com)
+    "space": "X",           # pular (X)
+    "z": "B",               # granada/alternativo
+    "b": "X", "r": "X", "x": "X",   # X (interação)
+    "f": "Y", "g": "Y",     # Y (entrar/sair veículo)
+    "q": "RB",              # cobertura (RB)
+    "c": "LB",              # roda de armas (LB)
+    "h": "R3",              # analógico direito clique
+    # Sistema
+    "esc": "START", "o": "START",   # menu do sistema
+    "p": "MENU",            # menu do jogo (MENU)
+    "i": "BACK",            # voltar
+    "enter": "A",           # confirmar (A)
+    "backspace": "B",       # recarregar / voltar (B)
     "f1": "GUIDE", "f2": "BACK", "home": "GUIDE", "insert": "BACK",
+    # Direcional
     "1": "DPAD_UP", "2": "DPAD_DOWN", "3": "DPAD_LEFT", "4": "DPAD_RIGHT",
     "e": "DPAD_RIGHT", "t": "DPAD_RIGHT",
-    "up": "UP",          # telefone (UP) — conforme jogargta.com
-    "down": "DPAD_DOWN", "left": "DPAD_LEFT", "right": "DPAD_RIGHT",
+    "up": "DPAD_UP", "down": "DPAD_DOWN", "left": "DPAD_LEFT", "right": "DPAD_RIGHT",
     "page_up": "DPAD_UP", "page_down": "DPAD_DOWN",
-    "shift": "L3", "shift_l": "L3", "shift_r": "L3", "rshift": "L3",
-    "capslock": "LT", "caps_lock": "LT",  # mirar (LT)
-    "alt_l": "@PRECISION", "ctrl_l": "@PRECISION", "ctrl_r": "RB",
+    # Analógico esquerdo (caminhar/correr)
+    "shift": "L3", "shift_l": "L3", "shift_r": "L3", "rshift": "L3",   # caminhar
+    "capslock": "LS",       # correr (Shift no site)
+    "ctrl_l": "@PRECISION", "ctrl_r": "@PRECISION",   # precisão/mirar fino
     "v": "ACCEL_HALF",
-    "tab": "@MODE", "f12": "@MODE",
+    "tab": "@MODE", "f12": "@MODE",   # alternar a pé/carro
 }
 _G6_CAR = _merge(_G6_FOOT, {
+    # Movimento do veículo (conforme jogargta.com)
     "w": "ACCEL", "s": "BRAKE", "a": "LS_LEFT", "d": "LS_RIGHT",
     "up": "ACCEL", "down": "BRAKE", "left": "LS_LEFT", "right": "LS_RIGHT",
-    "space": "RB",       # freio de mão (RB) — conforme jogargta.com
+    # Ações no carro
+    "space": "RB",       # freio de mão (RB)
+    "tab": "X",          # alternar câmera/visão (X)
+    "x": "X",            # alternar câmera/visão (X)
+    # Sistema
+    "enter": "A",        # confirmar (A)
+    "backspace": "B",    # recarregar/voltar (B)
+    "r": "B",            # recarregar/voltar (B)
+    "f": "Y",            # entrar/sair veículo (Y)
+    "p": "MENU",         # menu do jogo (MENU)
+    "up": "UP",          # telefone (UP)
+    "down": "DPAD_DOWN", # direcional baixo
+    "left": "DPAD_LEFT", # direcional esquerdo
+    "right": "DPAD_RIGHT", # direcional direito
 })
 _G6_MOUSE = {
     "left": "RT", "right": "RS", "middle": "LT", "x1": "LB", "x2": "RB",

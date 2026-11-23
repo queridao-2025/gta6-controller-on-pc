@@ -29,59 +29,7 @@
     "typing_pause": true,
     "auto_mode_f": false,
     "auto_menu_cursor": false,
-    "game_patterns": "gta, grand theft, fivem, cfx, remote play, xbox, xboxpcapp, xboxservice, gamingapp, xboxgame",
-    "toggle_key": "f8",
-    "stick_sensitivity": 1.0,
-    "mouse_sensitivity": 25,
-    "mouse_buttons": {
-      "0": "RT",
-      "2": "LT",
-      "1": "RS",
-      "3": "LB",
-      "4": "RB"
-    },
-    "gamepad_buttons": {
-      "0": "A", "1": "B", "2": "X", "3": "Y",
-      "4": "LB", "5": "RB", "6": "LT", "7": "RT",
-      "8": "VIEW", "9": "MENU", "10": "LS", "11": "RS",
-      "12": "UP", "13": "DOWN", "14": "LEFT", "15": "RIGHT"
-    },
-    "profiles": {
-      "foot": {
-        "lxN": ["KeyA"], "lxP": ["KeyD"], "lyP": ["KeyW"], "lyN": ["KeyS"],
-        "A": ["ShiftLeft","ShiftRight","Enter"],
-        "B": ["KeyR","Backspace"],
-        "X": ["Space"],
-        "Y": ["KeyF"],
-        "LB": ["Tab"], "RB": ["KeyQ"],
-        "LS": ["ControlLeft","ControlRight"],
-        "RS": ["KeyC"],
-        "MENU": ["KeyP"], "VIEW": ["KeyV"],
-        "INTERACTION": ["KeyM"], "SPECIAL": ["CapsLock"],
-        "UP": ["ArrowUp"], "DOWN": ["AltLeft","KeyZ","ArrowDown"],
-        "LEFT": ["KeyG","ArrowLeft"], "RIGHT": ["KeyE","ArrowRight"]
-      },
-      "driving": {
-        "PRECISION": ["ShiftLeft","ShiftRight"],
-        "lxN": ["KeyA"], "lxP": ["KeyD"],
-        "rt": ["KeyW"], "lt": ["KeyS"],
-        "A": ["Enter"], "B": ["KeyR","Backspace"],
-        "X": ["Tab","KeyX"], "RB": ["Space"], "Y": ["KeyF"],
-        "LS": ["KeyE"], "RS": ["KeyC"],
-        "MENU": ["KeyP"], "VIEW": ["KeyV"],
-        "INTERACTION": ["KeyM"], "SPECIAL": ["CapsLock"],
-        "UP": ["ArrowUp"], "DOWN": ["AltLeft","KeyZ","ArrowDown"],
-        "LEFT": ["KeyQ","ArrowLeft"], "RIGHT": ["KeyH","ArrowRight"]
-      },
-      "menu": {
-        "A": ["Enter"], "B": ["Backspace"],
-        "X": ["Space"], "Y": ["KeyF"],
-        "LB": ["KeyQ"], "RB": ["KeyE","Tab"],
-        "MENU": ["KeyP"], "VIEW": ["KeyV"],
-        "UP": ["ArrowUp","KeyW"], "DOWN": ["ArrowDown","KeyS"],
-        "LEFT": ["ArrowLeft","KeyA"], "RIGHT": ["ArrowRight","KeyD"]
-      }
-    },
-    "overrides": {}
-  }
+    "game_patterns": "gta, grand theft, fivem, cfx, remote play, xbox, xboxpcapp, xboxservice, gamingapp, xboxgame"
+  },
+  "overrides": {}
 }
