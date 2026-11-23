@@ -1372,15 +1372,61 @@ class Engine:
 
         # ----------------------------------------------------------------- Velocidade
         # MODO VELOCIDADE (comportamento GTA V real):
-        # A posição do mouse relativa ao centro = velocidade da câmera.
-        # Quando o mouse para, o cursor volta ao centro instantaneamente.
+        # A posição do mouse relativa ao centro = velocidade da câmera (RS = velocidade).
+        # Quando o mouse para, o cursor volta ao centro e a câmera pára imediatamente.
+        #
+        # Pipeline fiel ao GTA V:
+        #   1. Pos do mouse relativa ao centro (normalizada -1..1)
+        #   2. Aplica sensibilidade SENS_X/SENS_Y
+        #   3. Deadzone nativa do jogo (0.467): valores abaixo são IGNORADOS pelo jogo
+        #   4. Reescalona a faixa útil [0.467, 1.0] para [0, 1]
+        #   5. Aim acceleration: curva não-linear (mais lento perto do centro)
+        #   6. Anti-deadzone: empurra mínimo para acima da zona morta do jogo
         with self.mouse_lock:
             vx, vy = self.rs_pos[0], self.rs_pos[1]
 
-        # Aplica curva de resposta (aim acceleration) - mais lento perto do centro
+        mag = math.hypot(vx, vy)
+        if mag == 0.0:
+            return 0.0, 0.0
+
+        # --- Deadzone nativa do GTA V (0.467) ---
+        # O jogo ignora qualquer valor do stick abaixo de 0.467.
+        # Precisamos: nossa zona morta interna -> deadzone do jogo -> faixa útil.
+        dz_game = 0.467   # deadzone nativa do GTA V (14/30)
+        dz_ours = S["DEADZONE_RS"]  # nossa zona morta (0.12)
+        useful_range = 1.0 - dz_game  # 0.533
+
+        if mag < dz_ours:
+            return 0.0, 0.0
+
+        # Normaliza após nossa zona morta (0 -> 1)
+        normalized = (mag - dz_ours) / (1.0 - dz_ours)
+
+        # Aim acceleration: mais lento perto do centro, mais rápido nas bordas
+        # Expoente > 1.0 suaviza pequenos movimentos perto do centro
+        curved = normalized ** 1.6
+
+        # Transição suave através da deadzone do jogo (0 -> dz_game)
+        # Sem isso, o câmera "pula" quando sai da zona morta do GTA V
+        transition_zone = 0.15
+        if curved < transition_zone:
+            t = curved / transition_zone
+            t = t * t * (3.0 - 2.0 * t)  # smoothstep
+            output_mag = t * dz_game
+        else:
+            t = (curved - transition_zone) / (1.0 - transition_zone)
+            output_mag = dz_game + t * useful_range
+
+        # Anti-deadzone: garante mínimo acima da deadzone do jogo (para Remote Play)
+        if output_mag > 0:
+            output_mag = anti_deadzone(output_mag)
+
+        # Curva de resposta configurável (progressive / aim / linear)
         curve = S["AIM_RESPONSE"] if self.aim_active() else S["RESPONSE"]
-        vx = apply_response(vx, curve)
-        vy = apply_response(vy, curve)
+        if curve == "progressive":
+            output_mag = output_mag ** 0.65
+        elif curve == "aim":
+            output_mag = output_mag ** 0.45
 
         # Multiplicadores de modo (precisão / mira)
         mult = 1.0
@@ -1388,16 +1434,17 @@ class Engine:
             mult *= S["PRECISION_MULT"]
         if self.aim_active():
             mult *= S["AIM_MULT"]
-        vx *= mult
-        vy *= mult
+        output_mag *= mult
 
-        # Anti-deadzone: garante que qualquer movimento rompa a zona morta nativa
-        # do GTA V no Xbox Remote Play
-        if vx != 0.0 or vy != 0.0:
-            vx = anti_deadzone(vx)
-            vy = anti_deadzone(vy)
+        # Clamp final
+        output_mag = min(output_mag, 1.0)
 
-        # Deadzone radial mínima interna para evitar drift residual
+        # Reaplica direção
+        scale = output_mag / mag
+        vx *= scale
+        vy *= scale
+
+        # Deadzone radial mínima final (evita drift residual)
         vx, vy = radial_deadzone(vx, vy, S["DEADZONE_RS"])
 
         # Clamp circular: em 360° a magnitude nunca estoura 1.0
@@ -1410,6 +1457,9 @@ class Engine:
             vx = 0.0
         if abs(vy) < SETTLE:
             vy = 0.0
+
+        return vx, vy
+
 
     def supervise(self):
         hwnd, title, exe = fg_window()
