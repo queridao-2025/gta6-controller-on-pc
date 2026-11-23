@@ -622,7 +622,6 @@ _G6_CAR = _merge(_G6_FOOT, {
     "up": "ACCEL", "down": "BRAKE", "left": "LS_LEFT", "right": "LS_RIGHT",
     # Ações no carro
     "space": "RB",       # freio de mão (RB)
-    "tab": "X",          # alternar câmera/visão (X)
     "x": "X",            # alternar câmera/visão (X)
     # Sistema
     "enter": "A",        # confirmar (A)
